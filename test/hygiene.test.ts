@@ -1,0 +1,48 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+
+/**
+ * Repository hygiene guards.
+ *
+ * These pin two conventions that are otherwise only "please remember":
+ * test sources stay plain-text and import the public surface from `../src/index.js`.
+ */
+const testDir = import.meta.dirname;
+const testSources = readdirSync(testDir)
+  .filter((name) => name.endsWith(".ts"))
+  .map((name) => ({ name, text: readFileSync(join(testDir, name), "utf8") }));
+
+describe("test source hygiene", () => {
+  it("finds the suites it is guarding", () => {
+    expect(testSources.length).toBeGreaterThan(4);
+  });
+
+  it("contains no raw control characters", () => {
+    // A literal NUL or similar makes editors and file-reading tools treat the file as
+    // binary; escapes like "\u0000" must be used instead.
+    const offenders = testSources.flatMap(({ name, text }) =>
+      [...text]
+        .map((char, index) => ({ char, index }))
+        .filter(({ char }) => {
+          const code = char.codePointAt(0) ?? 0;
+          return code < 0x20 && char !== "\n" && char !== "\r" && char !== "\t";
+        })
+        .map(({ index }) => `${name}:${index}`),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it("imports the public surface from ../src/index.js", () => {
+    // The only sanctioned submodule import is src/errors.js, which holds the internal
+    // scrubUrl() helper that is deliberately not part of the public API.
+    const allowed = new Set(["../src/errors.js"]);
+    const offenders = testSources.flatMap(({ name, text }) =>
+      [...text.matchAll(/from "(\.\.\/src\/[^"]+)"/g)]
+        .map((match) => match[1] as string)
+        .filter((specifier) => !specifier.endsWith("/index.js") && !allowed.has(specifier))
+        .map((specifier) => `${name} imports ${specifier}`),
+    );
+    expect(offenders).toEqual([]);
+  });
+});

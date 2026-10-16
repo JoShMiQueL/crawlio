@@ -1,0 +1,74 @@
+{
+  "name": "scrape-sdk",
+  "version": "0.1.0",
+  "description": "Simple, typed web scraping for static HTML",
+  "keywords": [
+    "scraper",
+    "scraping",
+    "html-parser",
+    "css-selectors",
+    "web-scraping",
+    "cheerio",
+    "parsing",
+    "structured-data",
+    "extraction",
+    "typescript"
+  ],
+  "homepage": "https://github.com/JoShMiQueL/scrape-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/JoShMiQueL/scrape-sdk/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JoShMiQueL/scrape-sdk.git"
+  },
+  "author": "JoShMiQueL",
+  "license": "MIT",
+  "sideEffects": false,
+  "type": "module",
+  "packageManager": "pnpm@12.14.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "test:types": "tsc --noEmit -p tsconfig.test.json",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "check:pack": "publint && attw --pack . --profile esm-only",
+    "prepack": "pnpm check && pnpm build",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
+    "@biomejs/biome": "^2.5.15",
+    "@types/node": "^26.0.0",
+    "publint": "^0.3.25",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "p-limit": "^7.3.3",
+    "p-retry": "^8.0.1",
+    "robots-parser": "^3.0.1"
+  }
+}

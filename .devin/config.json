@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Exec(git status)",
+      "Exec(git diff)",
+      "Exec(git log)",
+      "Exec(git show)",
+      "Exec(ls)",
+      "Exec(cat)",
+      "Exec(grep)",
+      "Exec(find)",
+      "Exec(pnpm typecheck)",
+      "Exec(pnpm check)",
+      "Exec(pnpm test)",
+      "Exec(pnpm build)"
+    ],
+    "deny": [
+      "Exec(rm)",
+      "Exec(rmdir)",
+      "Exec(del)",
+      "Exec(format)",
+      "Exec(sudo)",
+      "Exec(git push)",
+      "Exec(git reset --hard)",
+      "Exec(git clean -f)",
+      "Write(.env*)"
+    ],
+    "ask": []
+  },
+  "read_config_from": {
+    "agents_standard": true
+  }
+}

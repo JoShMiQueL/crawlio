@@ -1,0 +1,60 @@
+{
+  "PreToolUse": [
+    {
+      "matcher": "^(edit|write|apply_patch)$",
+      "hooks": [
+        {
+          "type": "prompt",
+          "prompt": "You are a guard. The orchestrator should delegate file changes to the `coder` subagent, not edit directly. If this edit is part of an in-progress delegation to coder or a trivial one-line fix, respond {\"decision\":\"approve\"}. Otherwise respond {\"decision\":\"block\",\"reason\":\"Delegate code changes to the coder subagent via run_subagent\"}.",
+          "timeout": 15
+        }
+      ]
+    }
+  ],
+  "Stop": [
+    {
+      "matcher": "",
+      "hooks": [
+        {
+          "type": "prompt",
+          "prompt": "You are a delivery-gate judge. If this turn produced code changes that have not been verified by the `qa` subagent and reviewed by the `reviewer` subagent, respond {\"decision\":\"block\",\"reason\":\"Code changes must be verified by qa and reviewed by reviewer before finishing.\"} If no code was changed, or verification already ran, respond {\"decision\":\"approve\"}.",
+          "timeout": 15
+        }
+      ]
+    }
+  ],
+  "SessionStart": [
+    {
+      "matcher": "",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"Devin multi-agent system active. Delegate code work to .devin/agents/ subagents; load .devin/context/ via contextscout when relevant.\"}}'"
+        }
+      ]
+    }
+  ],
+  "SubagentStop": [
+    {
+      "matcher": "",
+      "hooks": [
+        {
+          "type": "prompt",
+          "prompt": "A subagent just finished. If its final report lacks a `## Status` or `## Verdict` header, or reports blocked/fail/request-changes without a clear reason, respond {\"decision\":\"block\",\"reason\":\"Subagent output contract violated or incomplete — re-delegate or fix.\"}. Otherwise approve.",
+          "timeout": 15
+        }
+      ]
+    }
+  ],
+  "PostCompaction": [
+    {
+      "matcher": "",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostCompaction\",\"additionalContext\":\"Orchestration active: delegate code work to .devin/agents/ subagents; gates require qa+reviewer before finishing.\"}}'"
+        }
+      ]
+    }
+  ]
+}
