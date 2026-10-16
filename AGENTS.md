@@ -34,7 +34,7 @@ the extraction spec. Pre-1.0 and unpublished; the npm name is a placeholder.
 
 ## Hard rules for agents
 
-- **Respect target sites:** honor robots.txt (opt-in but supported), site terms, and rate limits. Default to conservative request rates; make them configurable.
+- **Respect target sites:** honor robots.txt (on by default — `robots: false` opts out), site terms, and rate limits. Default to conservative request rates; make them configurable.
 - **Retry/backoff:** all network I/O goes through one shared retry policy with exponential backoff + jitter — no ad-hoc `setTimeout` retries at call sites.
 - **Typed extraction:** selectors/parsers return typed results; validate raw page data before it enters the SDK's public types. Never trust scraped HTML shape.
 - **No credential leakage:** credentials/proxy auth come from config/env, never hardcoded; scrub auth headers and cookies from logs, errors, and fixtures.

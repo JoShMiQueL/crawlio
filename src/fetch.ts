@@ -4,8 +4,14 @@ import { fuseSignal } from "./signal.js";
 import type { FetchHtmlOptions, FetchHtmlResult } from "./types.js";
 import { VERSION } from "./version.js";
 
+/**
+ * Default User-Agent: an identifiable `scrape-sdk/<version>` — honest by
+ * default, overridable per call or per scraper via `userAgent`.
+ */
 export const DEFAULT_USER_AGENT = `scrape-sdk/${VERSION}`;
+/** Default per-request timeout in milliseconds. */
 export const DEFAULT_TIMEOUT = 10_000;
+/** Default number of retries after the first attempt (4 tries in total). */
 export const DEFAULT_RETRIES = 3;
 
 const ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";

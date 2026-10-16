@@ -26,13 +26,8 @@ export {
   scrape,
   scrape as scrapeUrl,
   scrapeAll,
-  scrapeDocuments,
   scrapeMany,
   scrapeManySafe,
-  scrapePage,
-  scrapePageAll,
-  scrapePages,
-  scrapeUrls,
 } from "./scraper.js";
 export type {
   ExtractOptions,

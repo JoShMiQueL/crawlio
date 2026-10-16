@@ -55,7 +55,9 @@ export interface ScrapeErrorOptions {
   url?: string;
   /** The underlying error, preserved for diagnostics. Stored verbatim. */
   cause?: unknown;
+  /** HTTP status code, when the failure carried one ({@link HttpError}). */
   status?: number;
+  /** HTTP status text, when the response carried one. */
   statusText?: string;
 }
 
@@ -109,7 +111,9 @@ export class TimeoutError extends ScrapeError {
 }
 /** The server answered with a non-OK HTTP status. */
 export class HttpError extends ScrapeError {
+  /** The non-OK status the server answered with. */
   readonly status: number;
+  /** The status text, when the response carried one. */
   readonly statusText?: string;
   constructor(message: string, options?: ScrapeErrorOptions | number, status?: number) {
     const opts = typeof options === "number" ? undefined : options;

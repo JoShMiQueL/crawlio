@@ -134,7 +134,7 @@ describe("type inference", () => {
         title: "h1",
         prices: { selector: ".p", all: true },
       },
-      { fetch: stub },
+      { fetch: stub, robots: false },
     );
     expectTypeOf(result).toEqualTypeOf<{
       title: string | undefined;
@@ -144,7 +144,7 @@ describe("type inference", () => {
 
   it("fetchHtml() returns a FetchHtmlResult", async () => {
     const stub = async () => new Response("<html></html>", { status: 200 });
-    const result = await fetchHtml("https://example.com/x", { fetch: stub });
+    const result = await fetchHtml("https://example.com/x", { fetch: stub, robots: false });
     expectTypeOf(result).toEqualTypeOf<FetchHtmlResult>();
   });
 });

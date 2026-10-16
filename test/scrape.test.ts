@@ -37,7 +37,10 @@ describe("fetchHtml", () => {
   it("decodes an injected response", async () => {
     const html = readFixture("product-listing.html");
     const { impl, calls } = staticFetch(html);
-    const result = await fetchHtml("https://example.com/listing", { fetch: impl });
+    const result = await fetchHtml("https://example.com/listing", {
+      fetch: impl,
+      robots: false,
+    });
     expect(result.html).toContain("product");
     expect(result.status).toBe(200);
     expect(result.contentType).toBe("text/html; charset=utf-8");
@@ -46,7 +49,7 @@ describe("fetchHtml", () => {
 
   it("sends an identifiable User-Agent header", async () => {
     const { impl, calls } = staticFetch("<html></html>");
-    await fetchHtml("https://example.com/", { fetch: impl });
+    await fetchHtml("https://example.com/", { fetch: impl, robots: false });
     const headers = new Headers(calls[0]?.init?.headers);
     expect(headers.get("user-agent")).toContain("scrape-sdk/");
   });
@@ -60,7 +63,7 @@ describe("fetchHtml", () => {
       return new Response("");
     }) as FetchImpl;
     try {
-      await fetchHtml("https://example.com/", { fetch: impl });
+      await fetchHtml("https://example.com/", { fetch: impl, robots: false });
       expect(globalCalled).toBe(false);
     } finally {
       globalThis.fetch = original;
@@ -72,6 +75,7 @@ describe("fetchHtml", () => {
     const result = await fetchHtml("https://example.com/x", {
       fetch: impl,
       throwOnHttpError: false,
+      robots: false,
     });
     expect(result.status).toBe(404);
     expect(result.html).toContain("gone");
@@ -79,7 +83,9 @@ describe("fetchHtml", () => {
 
   it("throws HttpError on 404 and does not retry", async () => {
     const { impl, calls } = staticFetch("<html>nope</html>", 404);
-    const err = await fetchHtml("https://example.com/x", { fetch: impl }).catch((e) => e);
+    const err = await fetchHtml("https://example.com/x", { fetch: impl, robots: false }).catch(
+      (e) => e,
+    );
     expect(err).toBeInstanceOf(HttpError);
     expect((err as HttpError).status).toBe(404);
     expect(calls).toHaveLength(1);
@@ -93,7 +99,7 @@ describe("fetchHtml", () => {
       const status = calls.length < 2 ? 429 : 200;
       return new Response(html, { status, headers: HTML_HEADERS });
     }) as FetchImpl;
-    const result = await fetchHtml("https://example.com/x", { fetch: impl });
+    const result = await fetchHtml("https://example.com/x", { fetch: impl, robots: false });
     expect(result.status).toBe(200);
     expect(calls.length).toBeGreaterThanOrEqual(2);
   });
@@ -105,7 +111,7 @@ describe("fetchHtml", () => {
       const status = calls.length === 1 ? 503 : 200;
       return new Response("<html>ok</html>", { status, headers: HTML_HEADERS });
     }) as FetchImpl;
-    const result = await fetchHtml("https://example.com/x", { fetch: impl });
+    const result = await fetchHtml("https://example.com/x", { fetch: impl, robots: false });
     expect(result.status).toBe(200);
     expect(calls).toHaveLength(2);
   });
@@ -113,7 +119,7 @@ describe("fetchHtml", () => {
   it("per-call fetch overrides the instance default fetch", async () => {
     const a = staticFetch("<html>from-a</html>");
     const b = staticFetch("<html>from-b</html>");
-    const scraper = createScraper({ fetch: a.impl });
+    const scraper = createScraper({ fetch: a.impl, robots: false });
     const result = await scraper.fetchHtml("https://override.example/", { fetch: b.impl });
     expect(result.html).toContain("from-b");
     expect(b.calls).toHaveLength(1);
@@ -122,7 +128,7 @@ describe("fetchHtml", () => {
 
   it("falls back to the instance fetch when no per-call fetch is given", async () => {
     const a = staticFetch("<html>from-a</html>");
-    const scraper = createScraper({ fetch: a.impl });
+    const scraper = createScraper({ fetch: a.impl, robots: false });
     const result = await scraper.fetchHtml("https://override.example/");
     expect(result.html).toContain("from-a");
     expect(a.calls).toHaveLength(1);
@@ -139,6 +145,7 @@ describe("fetchHtml", () => {
       fetch: hanging,
       timeout: 40,
       retries: 0,
+      robots: false,
     }).catch((e) => e);
     expect(err).toBeInstanceOf(TimeoutError);
   });
@@ -159,6 +166,7 @@ describe("fetchHtml", () => {
       fetch: impl,
       signal: controller.signal,
       retries: 3,
+      robots: false,
     }).catch((e) => e);
     expect(err).toBeInstanceOf(FetchError);
     expect((err as FetchError).cause).toBeInstanceOf(DOMException);
@@ -186,6 +194,7 @@ describe("fetchHtml", () => {
       fetch: impl,
       signal: controller.signal,
       retries: 3,
+      robots: false,
     }).catch((e) => e);
     // Let the fetch be in flight, then abort.
     await new Promise((r) => setTimeout(r, 10));
@@ -211,6 +220,7 @@ describe("fetchHtml", () => {
       fetch: impl,
       signal: controller.signal,
       retries: 3,
+      robots: false,
     }).catch((e) => e);
     // Let the first attempt fail and the backoff begin, then abort.
     await new Promise((r) => setTimeout(r, 50));
@@ -230,14 +240,16 @@ describe("fetchHtml", () => {
       if (calls === 1) throw new Error("ECONNRESET");
       return new Response("<html>ok</html>", { status: 200, headers: HTML_HEADERS });
     }) as FetchImpl;
-    const result = await fetchHtml("https://example.com/x", { fetch: impl });
+    const result = await fetchHtml("https://example.com/x", { fetch: impl, robots: false });
     expect(result.status).toBe(200);
     expect(calls).toBe(2);
   });
 
   it("throws ConfigError for an unparseable URL instead of a raw TypeError", async () => {
     const { impl, calls } = staticFetch("<html></html>");
-    const err = await fetchHtml("not a url", { fetch: impl, retries: 0 }).catch((e) => e);
+    const err = await fetchHtml("not a url", { fetch: impl, retries: 0, robots: false }).catch(
+      (e) => e,
+    );
     expect(err).toBeInstanceOf(ConfigError);
     expect(err).toBeInstanceOf(ScrapeError);
     expect(calls).toHaveLength(0);
@@ -245,9 +257,11 @@ describe("fetchHtml", () => {
 
   it("throws ConfigError for a non-integer retries instead of p-retry's TypeError", async () => {
     const { impl, calls } = staticFetch("<html></html>");
-    const err = await fetchHtml("https://example.com/x", { fetch: impl, retries: 1.5 }).catch(
-      (e) => e,
-    );
+    const err = await fetchHtml("https://example.com/x", {
+      fetch: impl,
+      retries: 1.5,
+      robots: false,
+    }).catch((e) => e);
     expect(err).toBeInstanceOf(ConfigError);
     expect(err).toBeInstanceOf(ScrapeError);
     expect(calls).toHaveLength(0);
@@ -255,10 +269,25 @@ describe("fetchHtml", () => {
 
   it("throws ConfigError for a negative timeout", async () => {
     const { impl, calls } = staticFetch("<html></html>");
-    const err = await fetchHtml("https://example.com/x", { fetch: impl, timeout: -1 }).catch(
-      (e) => e,
-    );
+    const err = await fetchHtml("https://example.com/x", {
+      fetch: impl,
+      timeout: -1,
+      robots: false,
+    }).catch((e) => e);
     expect(err).toBeInstanceOf(ConfigError);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("throws ConfigError for a negative or non-finite requestDelay", async () => {
+    const { impl, calls } = staticFetch("<html></html>");
+    for (const requestDelay of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const err = await fetchHtml("https://example.com/x", {
+        fetch: impl,
+        requestDelay,
+        robots: false,
+      }).catch((e) => e);
+      expect(err).toBeInstanceOf(ConfigError);
+    }
     expect(calls).toHaveLength(0);
   });
 });
@@ -274,7 +303,7 @@ describe("scrape", () => {
         productNames: { selector: ".product-name", all: true },
         firstLink: { selector: ".product-link", attr: "href" },
       },
-      { fetch: impl },
+      { fetch: impl, robots: false },
     );
     expect(result.title).toBe("Trail & Trek — Sale");
     expect(result.productNames).toHaveLength(3);
@@ -289,7 +318,7 @@ describe("scrape", () => {
       "https://example.com/listing",
       "li.product",
       { name: ".product-name", price: ".price" },
-      { fetch: impl },
+      { fetch: impl, robots: false },
     );
     expect(items).toHaveLength(3);
     expect(items[0]?.name).toBe("Trail Shell Jacket");
@@ -301,7 +330,7 @@ describe("scrape", () => {
     const results = await scrapeMany(
       ["https://example.com/a", "https://example.com/b", "https://example.com/c"],
       { title: "h1" },
-      { fetch: impl },
+      { fetch: impl, robots: false },
     );
     expect(results).toHaveLength(3);
   });
@@ -317,7 +346,7 @@ describe("scrape", () => {
       }
       return new Response("", { status: 500 });
     }) as FetchImpl;
-    const scraper = createScraper({ fetch: impl, retries: 0 });
+    const scraper = createScraper({ fetch: impl, retries: 0, robots: false });
     const results = await scraper.scrapeManySafe(
       ["https://example.com/good", "https://example.com/bad", "not a url"],
       { title: "h1" },
@@ -338,7 +367,7 @@ describe("scrape", () => {
   it("scrapeManySafe surfaces a mid-backoff abort as FetchError, not ConfigError", async () => {
     const impl: FetchImpl = (async () => new Response("", { status: 429 })) as FetchImpl;
     const controller = new AbortController();
-    const scraper = createScraper({ fetch: impl, retries: 3 });
+    const scraper = createScraper({ fetch: impl, retries: 3, robots: false });
     const pending = scraper.scrapeManySafe(
       ["https://example.com/x"],
       { title: "h1" },
@@ -363,7 +392,7 @@ describe("scrape", () => {
     const results = await scrapeManySafe(
       ["https://example.com/a"],
       { title: "h1" },
-      { fetch: impl },
+      { fetch: impl, robots: false },
     );
     expect(results[0]?.ok).toBe(true);
   });
@@ -415,12 +444,32 @@ describe("robots", () => {
     expect(calls).toHaveLength(3);
   });
 
-  it("does not fetch robots.txt when robots is false (default)", async () => {
+  it("honors robots.txt by default — a fresh origin's first request fetches it", async () => {
+    const { impl, calls } = robotsFetch("User-agent: *\nDisallow: /private", "<html></html>");
+    // No `robots` flag anywhere: on-by-default is the contract.
+    const scraper = createScraper({ fetch: impl });
+    const err = await scraper.fetchHtml(TARGET).catch((e) => e);
+    expect(err).toBeInstanceOf(RobotsError);
+    // Only robots.txt was requested — the page was never fetched.
+    expect(calls).toEqual(["https://example.com/robots.txt"]);
+  });
+
+  it("does not fetch robots.txt when robots is false", async () => {
     const { impl, calls } = robotsFetch("User-agent: *\nDisallow: /", "<html></html>");
     const scraper = createScraper({ fetch: impl });
-    await scraper.fetchHtml(TARGET);
+    await scraper.fetchHtml(TARGET, { robots: false });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toBe(TARGET);
+  });
+
+  it("serializePerOrigin: false does not bypass robots.txt", async () => {
+    const { impl, calls } = robotsFetch("User-agent: *\nDisallow: /private", "<html></html>");
+    const scraper = createScraper({ fetch: impl, serializePerOrigin: false });
+    // Robots gating survives the serialization bypass: the URL is still
+    // disallowed and the page fetch never happens.
+    const err = await scraper.fetchHtml(TARGET, { serializePerOrigin: false }).catch((e) => e);
+    expect(err).toBeInstanceOf(RobotsError);
+    expect(calls).toEqual(["https://example.com/robots.txt"]);
   });
 
   it("uses the per-call fetch for both robots.txt and the page", async () => {
@@ -521,7 +570,7 @@ describe("robots", () => {
   });
 });
 
-describe("per-host serialisation", () => {
+describe("per-origin serialisation", () => {
   it("serialises two same-origin requests", async () => {
     const starts: number[] = [];
     const impl: FetchImpl = (async () => {
@@ -529,7 +578,7 @@ describe("per-host serialisation", () => {
       await new Promise((r) => setTimeout(r, 50));
       return new Response("<html></html>", { status: 200, headers: HTML_HEADERS });
     }) as FetchImpl;
-    const scraper = createScraper({ fetch: impl });
+    const scraper = createScraper({ fetch: impl, robots: false });
     await Promise.all([
       scraper.fetchHtml("https://same.example/a"),
       scraper.fetchHtml("https://same.example/b"),
@@ -544,7 +593,7 @@ describe("per-host serialisation", () => {
       await new Promise((r) => setTimeout(r, 60));
       return new Response("<html></html>", { status: 200, headers: HTML_HEADERS });
     }) as FetchImpl;
-    const scraper = createScraper({ fetch: impl });
+    const scraper = createScraper({ fetch: impl, robots: false });
     const start = Date.now();
     await Promise.all([
       scraper.fetchHtml("https://one.example/a"),
@@ -564,7 +613,7 @@ describe("per-host serialisation", () => {
       await new Promise((r) => setTimeout(r, 80));
       return new Response("<html></html>", { status: 200, headers: HTML_HEADERS });
     }) as FetchImpl;
-    const scraper = createScraper({ fetch: impl, concurrency: 2 });
+    const scraper = createScraper({ fetch: impl, concurrency: 2, robots: false });
     const t0 = Date.now();
     await Promise.all([
       scraper.fetchHtml("https://a.example/1"),
@@ -592,12 +641,136 @@ describe("per-host serialisation", () => {
       if (url.endsWith("/fail")) throw new Error("network down");
       return new Response("<html></html>", { status: 200, headers: HTML_HEADERS });
     }) as FetchImpl;
-    const scraper = createScraper({ fetch: impl, retries: 0 });
+    const scraper = createScraper({ fetch: impl, retries: 0, robots: false });
     const failed = scraper.fetchHtml("https://x.example/fail").catch((e) => e);
     const ok = scraper.fetchHtml("https://x.example/ok");
     const [failResult, okResult] = await Promise.all([failed, ok]);
     expect(failResult).toBeInstanceOf(FetchError);
     expect(okResult.status).toBe(200);
     expect(order).toEqual(["https://x.example/fail", "https://x.example/ok"]);
+  });
+
+  /** A fetch that records the peak number of simultaneously in-flight calls. */
+  function trackingFetch(delayMs = 30) {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const impl: FetchImpl = (async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        await new Promise((r) => setTimeout(r, delayMs));
+        return new Response("<html></html>", { status: 200, headers: HTML_HEADERS });
+      } finally {
+        inFlight -= 1;
+      }
+    }) as FetchImpl;
+    return { impl, maxInFlight: () => maxInFlight };
+  }
+
+  it("serializePerOrigin: false lets same-origin requests run concurrently", async () => {
+    const { impl, maxInFlight } = trackingFetch();
+    const scraper = createScraper({ fetch: impl, serializePerOrigin: false, robots: false });
+    await Promise.all([
+      scraper.fetchHtml("https://same.example/a"),
+      scraper.fetchHtml("https://same.example/b"),
+      scraper.fetchHtml("https://same.example/c"),
+    ]);
+    expect(maxInFlight()).toBeGreaterThan(1);
+  });
+
+  it("serializePerOrigin: false at call level overrides the instance default", async () => {
+    const { impl, maxInFlight } = trackingFetch();
+    const scraper = createScraper({ fetch: impl, robots: false });
+    await Promise.all([
+      scraper.fetchHtml("https://same.example/a", { serializePerOrigin: false }),
+      scraper.fetchHtml("https://same.example/b", { serializePerOrigin: false }),
+    ]);
+    expect(maxInFlight()).toBeGreaterThan(1);
+  });
+
+  it("serializePerOrigin: true at call level overrides an instance false", async () => {
+    const { impl, maxInFlight } = trackingFetch();
+    const scraper = createScraper({ fetch: impl, serializePerOrigin: false, robots: false });
+    await Promise.all([
+      scraper.fetchHtml("https://same.example/a", { serializePerOrigin: true }),
+      scraper.fetchHtml("https://same.example/b", { serializePerOrigin: true }),
+    ]);
+    expect(maxInFlight()).toBe(1);
+  });
+
+  it("keeps same-origin requests serial by default", async () => {
+    const { impl, maxInFlight } = trackingFetch();
+    const scraper = createScraper({ fetch: impl, robots: false });
+    await Promise.all([
+      scraper.fetchHtml("https://same.example/a"),
+      scraper.fetchHtml("https://same.example/b"),
+      scraper.fetchHtml("https://same.example/c"),
+    ]);
+    expect(maxInFlight()).toBe(1);
+  });
+
+  it("requestDelay paces consecutive same-origin requests", async () => {
+    const requestDelay = 40;
+    const starts: number[] = [];
+    const impl: FetchImpl = (async () => {
+      starts.push(Date.now());
+      return new Response("<html></html>", { status: 200, headers: HTML_HEADERS });
+    }) as FetchImpl;
+    const scraper = createScraper({ fetch: impl, robots: false, requestDelay });
+    await Promise.all([
+      scraper.fetchHtml("https://paced.example/a"),
+      scraper.fetchHtml("https://paced.example/b"),
+      scraper.fetchHtml("https://paced.example/c"),
+    ]);
+    expect(starts).toHaveLength(3);
+    // The first request is not delayed; each later start is at least
+    // `requestDelay` after the previous one (responses are instant, so start
+    // spacing ≈ the gap between request end and next start).
+    for (let i = 1; i < starts.length; i += 1) {
+      expect((starts[i] as number) - (starts[i - 1] as number)).toBeGreaterThanOrEqual(
+        requestDelay,
+      );
+    }
+  });
+
+  it("requestDelay does not pace when serializePerOrigin is false", async () => {
+    // The delay lives inside the origin queue; with serialization off there is
+    // no queue and no pacing — all three starts cluster together.
+    const starts: number[] = [];
+    const impl: FetchImpl = (async () => {
+      starts.push(Date.now());
+      return new Response("<html></html>", { status: 200, headers: HTML_HEADERS });
+    }) as FetchImpl;
+    const scraper = createScraper({
+      fetch: impl,
+      robots: false,
+      serializePerOrigin: false,
+      requestDelay: 50,
+    });
+    await Promise.all([
+      scraper.fetchHtml("https://paced.example/a"),
+      scraper.fetchHtml("https://paced.example/b"),
+      scraper.fetchHtml("https://paced.example/c"),
+    ]);
+    expect(starts).toHaveLength(3);
+    // No ~50ms gaps: the whole burst spans far less than one delay.
+    expect((starts[2] as number) - (starts[0] as number)).toBeLessThan(50);
+  });
+
+  it("a call-level requestDelay of 0 overrides the instance default", async () => {
+    const starts: number[] = [];
+    const impl: FetchImpl = (async () => {
+      starts.push(Date.now());
+      return new Response("<html></html>", { status: 200, headers: HTML_HEADERS });
+    }) as FetchImpl;
+    const scraper = createScraper({ fetch: impl, robots: false, requestDelay: 100 });
+    await Promise.all([
+      scraper.fetchHtml("https://paced.example/a", { requestDelay: 0 }),
+      scraper.fetchHtml("https://paced.example/b", { requestDelay: 0 }),
+    ]);
+    expect(starts).toHaveLength(2);
+    // Requests still serialize (the queue is on), but the per-call 0 wins —
+    // no ~100ms gap between the two starts.
+    expect((starts[1] as number) - (starts[0] as number)).toBeLessThan(100);
   });
 });

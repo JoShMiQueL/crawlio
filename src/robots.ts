@@ -15,12 +15,28 @@ type RobotParser = (
 };
 const robotsParser = require("robots-parser") as RobotParser;
 
+/** A parsed robots.txt policy for one origin — the object `robots-parser` builds. */
 export type RobotsAgent = ReturnType<RobotParser>;
 
+/**
+ * Parse robots.txt `contents` (as fetched from `url`) into a {@link RobotsAgent}.
+ * Pure — performs no I/O.
+ *
+ * @param url The URL the file was fetched from (rules are matched against it).
+ * @param contents Raw robots.txt text.
+ * @returns A queryable policy agent.
+ */
 export function parseRobots(url: string, contents: string): RobotsAgent {
   return robotsParser(url, contents);
 }
 
+/**
+ * Whether `userAgent` may fetch `url` under `robots`.
+ *
+ * A missing policy (`null`/`undefined` — no usable robots.txt) means allow, and
+ * an undecidable answer from the parser is also treated as allowed: an
+ * ambiguous file must not silently block scraping.
+ */
 export function robotsAllowed(
   robots: RobotsAgent | null | undefined,
   url: string,
@@ -100,6 +116,7 @@ export async function fetchRobotsTxtResult(
   }
 }
 
+/** The `/robots.txt` URL for the origin of `targetUrl`. */
 export function robotsUrlFor(targetUrl: string): string {
   const parsed = new URL(targetUrl);
   return `${parsed.protocol}//${parsed.host}/robots.txt`;

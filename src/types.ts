@@ -23,8 +23,10 @@ export type FieldSpec =
        * {@link ExtractOptions.baseUrl}.
        *
        * By default resolution applies only to attributes that actually carry URLs —
-       * `href`, `src`, `srcset`, `action`, `poster`, `cite`, `data`, `formaction` —
-       * so `content`, `alt`, `title` and `data-*` values are returned verbatim. Set
+       * `href`, `src`, `action`, `poster`, `cite`, `data`, `formaction` —
+       * so `content`, `alt`, `title` and `data-*` values are returned verbatim.
+       * (`srcset` is deliberately excluded — its value is a candidate list, not
+       * one URL; see `URL_ATTRIBUTES` in extract.ts.) Set
        * this to `true` for a URL stashed in another attribute (e.g. `data-href`), or
        * to `false` to keep a `href` exactly as the page wrote it.
        */
@@ -106,7 +108,9 @@ export type ExtractOptions = {
    * Base used to resolve relative URL values obtained via `attr`.
    *
    * Resolution is deliberately narrow: only URL-carrying attributes (`href`, `src`,
-   * `srcset`, `action`, `poster`, `cite`, `data`, `formaction`) are resolved, so a
+   * `action`, `poster`, `cite`, `data`, `formaction`) are resolved — `srcset` is
+   * excluded on purpose (a candidate list, not one URL; see `URL_ATTRIBUTES` in
+   * extract.ts) — so a
    * `content`, `alt` or `data-*` value is never turned into a URL. Already-absolute
    * values are left untouched, blank values stay blank, and values that cannot be
    * resolved are passed through as-is. Per-field overrides live on
@@ -127,8 +131,43 @@ export interface FetchHtmlOptions {
   timeout?: number;
   /** Number of retries after the first attempt (total attempts = `retries + 1`). */
   retries?: number;
-  /** Default false — opt-in. Set true to honor robots.txt. */
+  /**
+   * Honor the origin's robots.txt. Defaults to true: `/robots.txt` is fetched
+   * once per origin and cached, a disallowed URL throws {@link RobotsError}
+   * before the page is requested, and a declared `Crawl-delay` is respected
+   * (capped). An absent or unreachable robots.txt is treated as allow-all.
+   * Set to false to skip the check entirely — that is the caller's
+   * responsibility.
+   */
   robots?: boolean;
+  /**
+   * Serialize requests to the same origin. Defaults to true: one request per
+   * origin at a time (the queue keys on `target.origin`, so http and https on
+   * the same host are different origins). When false, same-origin requests may
+   * run concurrently up to the global `concurrency` cap — the SDK no longer
+   * paces same-origin traffic, so disabling this is the caller's
+   * responsibility.
+   *
+   * Note that a per-call `false` wins over the instance default and does NOT
+   * wait for work already queued on the origin — it can overlap an in-flight
+   * serial call to the same origin.
+   */
+  serializePerOrigin?: boolean;
+  /**
+   * Minimum delay in milliseconds between consecutive requests to the same
+   * origin. Default 0 — no extra pacing.
+   *
+   * Enforced inside the per-origin serial queue: a queued task sleeps
+   * `requestDelay` before starting, so it paces the START of the next request
+   * off the END of the previous one — a gap, not a period. The first request
+   * to an origin is never delayed.
+   *
+   * Only applies while {@link FetchHtmlOptions.serializePerOrigin} is active:
+   * with `serializePerOrigin: false` there is no queue and no pacing (the same
+   * caveat as `Crawl-delay`, which is also honoured per request rather than
+   * between them once serialization is off).
+   */
+  requestDelay?: number;
   /** Throw an {@link HttpError} on non-2xx responses. Defaults to true. */
   throwOnHttpError?: boolean;
   /** Abort signal. */
@@ -139,11 +178,17 @@ export interface FetchHtmlOptions {
 
 /** The decoded result of a single fetched page. */
 export interface FetchHtmlResult {
+  /** The final response URL (after redirects), scrubbed of credentials. */
   url: string;
+  /** HTTP status code of the response. */
   status: number;
-  statusText?: string;
+  /** HTTP status text — empty string when the response carried none. */
+  statusText: string;
+  /** The response body decoded to text (BOM → header charset → meta sniff → UTF-8). */
   html: string;
+  /** Raw `Content-Type` header value, or null when the response had none. */
   contentType: string | null;
+  /** The raw response headers. */
   headers: Headers;
 }
 
@@ -159,29 +204,60 @@ export interface ScrapeOptions extends FetchHtmlOptions {
 
 /** Per-scraper defaults, merged under every call's per-request options. */
 export interface ScraperOptions {
+  /**
+   * Default User-Agent header. Falls back to an identifiable
+   * `scrape-sdk/<version>`; a per-call `userAgent` wins.
+   */
   userAgent?: string;
+  /** Default per-request timeout in milliseconds. */
   timeout?: number;
+  /** Default number of retries after the first attempt. */
   retries?: number;
+  /** Instance default for {@link FetchHtmlOptions.robots}. Defaults to true. */
   robots?: boolean;
+  /** Instance default for {@link FetchHtmlOptions.serializePerOrigin}. */
+  serializePerOrigin?: boolean;
+  /** Instance default for {@link FetchHtmlOptions.requestDelay}. */
+  requestDelay?: number;
+  /**
+   * Cap on requests in flight across ALL origins. A per-call value can only
+   * lower the effective parallelism, never raise it above this cap.
+   */
   concurrency?: number;
+  /** Injected fetch implementation (useful for tests). */
   fetch?: typeof globalThis.fetch;
 }
 
-/** A stateful scraper created by `createScraper`. */
+/** A stateful scraper created by {@link createScraper}. */
 export interface Scraper {
+  /** The User-Agent this scraper sends by default; a per-call `userAgent` wins. */
   readonly userAgent: string;
+  /** Fetch one page and return the decoded body plus response metadata. */
   fetchHtml(url: string | URL, options?: FetchHtmlOptions): Promise<FetchHtmlResult>;
+  /**
+   * Fetch `url`, parse it, and extract `fields`. The result type is inferred
+   * from the spec — see {@link FieldValue}.
+   */
   scrape<S extends FieldSpecRecord>(
     url: string | URL,
     fields: S,
     options?: ScrapeOptions,
   ): Promise<ExtractResult<S>>;
+  /**
+   * Like {@link Scraper.scrape} but extracts one record per `container` match,
+   * with field selectors scoped strictly inside each container.
+   */
   scrapeAll<S extends FieldSpecRecord>(
     url: string | URL,
     container: string,
     fields: S,
     options?: ScrapeOptions,
   ): Promise<Array<ExtractResult<S>>>;
+  /**
+   * Scrape several URLs with the same spec. Fails fast: the first rejection
+   * rejects the whole batch (use {@link Scraper.scrapeManySafe} for per-URL
+   * outcomes instead).
+   */
   scrapeMany<S extends FieldSpecRecord>(
     urls: readonly (string | URL)[],
     fields: S,
@@ -198,14 +274,20 @@ export interface Scraper {
 /** One entry of a batch scrape that never rejects. */
 export type ScrapeBatchItem<S extends FieldSpecRecord> =
   | {
+      /** The final fetched URL (post-redirects), scrubbed of credentials. */
       readonly url: string;
       readonly ok: true;
+      /** Extracted fields, typed by the spec. */
       readonly data: ExtractResult<S>;
+      /** HTTP status of the fetched page. */
       readonly status: number;
     }
   | {
+      /** The requested URL, scrubbed of credentials. */
       readonly url: string;
       readonly ok: false;
+      /** Why the scrape failed — always a {@link ScrapeError} subclass. */
       readonly error: ScrapeError;
+      /** HTTP status, present only when an {@link HttpError} carried one. */
       readonly status?: number;
     };
