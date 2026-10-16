@@ -1,6 +1,7 @@
 import { decodeBody } from "./charset.js";
 import { FetchError, HttpError, scrubUrl, TimeoutError } from "./errors.js";
 import { fuseSignal } from "./signal.js";
+import { headerKey, resolveStealth, stealthRequestHeaders } from "./stealth.js";
 import type { FetchHtmlOptions, FetchHtmlResult } from "./types.js";
 import { VERSION } from "./version.js";
 
@@ -17,6 +18,25 @@ export const DEFAULT_RETRIES = 3;
 const ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 
 /**
+ * Spread `caller` over `base` with HTTP header semantics: a caller header
+ * DISPLACES a same-named base key case-insensitively. Plain object spread would
+ * keep `accept-language` AND `Accept-Language` as two entries — both would go
+ * on the wire (a bot tell with an undefined winner).
+ */
+function overlayHeaders(
+  base: Record<string, string>,
+  caller: Record<string, string> | undefined,
+): Record<string, string> {
+  if (caller === undefined) return base;
+  for (const [key, value] of Object.entries(caller)) {
+    const existing = headerKey(base, key);
+    if (existing !== undefined) delete base[existing];
+    base[key] = value;
+  }
+  return base;
+}
+
+/**
  * Perform exactly one HTTP request and decode the body.
  *
  * This is deliberately the non-retried, non-robots layer: retries live in
@@ -26,6 +46,11 @@ const ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
  *
  * A non-OK response throws {@link HttpError} unless `throwOnHttpError === false`,
  * in which case the (error-status) response is returned so the caller can read it.
+ *
+ * With `options.stealth` enabled, the request carries the resolved browser
+ * profile's full header set instead of the honest minimal pair — the stateless
+ * half of stealth. The stateful half (cookie jar, referer chain) and solver
+ * retries live in `createScraper`, one layer up.
  *
  * @param url The URL to request (already normalized to a string).
  * @param options Per-request options.
@@ -37,7 +62,13 @@ export async function fetchHtmlOnce(
   fetchImpl: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<FetchHtmlResult> {
   const impl = options.fetch ?? fetchImpl;
-  const userAgent = options.userAgent ?? DEFAULT_USER_AGENT;
+  const stealth = resolveStealth(options.stealth);
+  const profile = stealth === null ? undefined : stealthRequestHeaders(stealth);
+  // UA precedence: explicit `userAgent` > stealth profile > honest default.
+  // An explicit UA under stealth keeps the profile's other headers — keeping
+  // the combination browser-consistent is then the caller's job (documented on
+  // StealthOptions).
+  const userAgent = options.userAgent ?? profile?.["user-agent"] ?? DEFAULT_USER_AGENT;
   const timeout = options.timeout ?? DEFAULT_TIMEOUT;
 
   const controller = new AbortController();
@@ -46,11 +77,10 @@ export async function fetchHtmlOnce(
 
   try {
     const response = await impl(url, {
-      headers: {
-        "user-agent": userAgent,
-        accept: ACCEPT,
-        ...options.headers,
-      },
+      headers:
+        profile === undefined
+          ? overlayHeaders({ "user-agent": userAgent, accept: ACCEPT }, options.headers)
+          : overlayHeaders({ ...profile, "user-agent": userAgent }, options.headers),
       signal: fused.signal,
     });
 

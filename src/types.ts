@@ -121,6 +121,141 @@ export type ExtractOptions = {
   parseOptions?: ParseOptions;
 };
 
+/**
+ * How long to wait between consecutive requests to the same origin.
+ *
+ * - a `number` — a fixed gap in milliseconds;
+ * - `{ min, max }` — a gap sampled uniformly at random in `[min, max]`
+ *   milliseconds, re-drawn for every request. Useful with `stealth` so request
+ *   cadence is not a metronome.
+ *
+ * Validation is strict: `min >= 0`, `max >= min`, both finite — anything else
+ * throws {@link ConfigError}.
+ */
+export type RequestDelay =
+  | number
+  | {
+      /** Minimum delay in milliseconds (inclusive). Must be `>= 0`. */
+      min: number;
+      /** Maximum delay in milliseconds (inclusive). Must be `>= min`. */
+      max: number;
+    };
+
+/**
+ * Controls the opt-in stealth behaviour of {@link FetchHtmlOptions.stealth}.
+ *
+ * Stealth is HTTP-layer only: it makes requests LOOK like a desktop browser at
+ * the header level — a full, internally consistent header set (User-Agent plus
+ * the `sec-ch-ua` client hints/`sec-fetch-*` metadata a real browser sends for
+ * a top-level document GET), a per-origin cookie jar, a referer chain across
+ * same-origin navigations, and (combined with a range `requestDelay`) jittered
+ * pacing. It deliberately does NOT touch the transport: TLS/JA3 and HTTP/2
+ * fingerprints still identify the client as Node's undici — to fix that, inject
+ * an impersonating transport via {@link FetchHtmlOptions.fetch}.
+ *
+ * Consistency rule: the headers sent must tell the SAME browser story. A
+ * Chrome `user-agent` without the matching `sec-ch-ua` hints is itself a tell,
+ * which is why the profiles below are complete header sets rather than a lone
+ * UA string. Overriding `userAgent` or individual `headers` on top of a profile
+ * can break that story — when you do, keep the pieces consistent yourself.
+ */
+export interface StealthOptions {
+  /**
+   * Browser family to mimic: `"chrome"` | `"firefox"` | `"safari"`.
+   * Default `"chrome"`. Profiles are realistic desktop snapshots (Chrome 131 /
+   * Firefox 133 / Safari 18 era); only the Chrome profile sends `sec-ch-ua`
+   * client hints, matching real browsers.
+   */
+  browser?: "chrome" | "firefox" | "safari";
+  /**
+   * Locale used for `Accept-Language`. Default `"en-US"` (sent as
+   * `en-US,en;q=0.9` — `q=0.5` on Firefox — like a real browser does).
+   */
+  locale?: string;
+  /**
+   * Persist `Set-Cookie` response headers per origin and resend matching
+   * cookies on later requests. Default `true` when stealth is on.
+   *
+   * The jar is intentionally minimal: `Expires`/`Max-Age` are honored (evicted
+   * lazily on read) and `Secure` cookies are only sent over https, but `Domain`
+   * subdomain scoping and `Path` are NOT modeled — cookies belong to an origin
+   * and are sent to every path on it.
+   */
+  cookies?: boolean;
+  /**
+   * Send `Referer: <last fetched page>` on subsequent same-origin requests.
+   * Default `true` when stealth is on. The first request to an origin sends no
+   * `Referer` and `sec-fetch-site: none` — like a typed-URL visit. An explicit
+   * per-call `headers.referer` always wins.
+   */
+  refererChain?: boolean;
+}
+
+/** What the SDK hands a {@link CaptchaSolver} when it detects a challenge page. */
+export interface CaptchaChallenge {
+  /** The page URL that returned the challenge. */
+  url: string;
+  /** Challenge type detected. */
+  type: "turnstile" | "recaptcha" | "hcaptcha" | "cloudflare-interstitial";
+  /** Extracted `sitekey`/`data-sitekey` when present. */
+  sitekey?: string;
+  /**
+   * Raw challenge page HTML — solvers needing extra fields (Cloudflare's
+   * `action`/`cData`/`pageData`, etc.) read them from this.
+   */
+  html: string;
+}
+
+/**
+ * What a {@link CaptchaSolver} returns: credentials to retry the request with.
+ *
+ * The v1 retry contract is cookies + User-Agent: `cookies` (e.g. a solved
+ * `cf_clearance` from an interstitial solver) are ALWAYS recorded into the
+ * per-scraper cookie jar — the persistence channel — and applied to the retry
+ * (via the jar when stealth cookies are enabled, else as a one-shot header),
+ * and a solution-bound `userAgent` is reused verbatim, since clearances are
+ * typically bound to the UA that solved them. `token` answers (injected into
+ * a `cf-turnstile-response`/`g-recaptcha-response` form field) cannot be
+ * applied generically by a plain GET retry and are carried for the solver's
+ * own use — form-post challenge flows are out of v1 scope.
+ */
+export interface CaptchaSolution {
+  /**
+   * Solved token (`cf-turnstile-response` / `g-recaptcha-response`). The SDK
+   * does NOT submit it for you — see the interface docs.
+   */
+  token?: string;
+  /**
+   * Cookies to set on the retry (e.g. `cf_clearance` from interstitial
+   * solvers). Always recorded into the per-scraper cookie jar, so they persist
+   * for later requests whose options enable stealth cookies.
+   */
+  cookies?: Record<string, string>;
+  /** UA the solution is bound to — the retry MUST reuse it verbatim. */
+  userAgent?: string;
+}
+
+/**
+ * Pluggable CAPTCHA solver.
+ *
+ * The SDK ships NO built-in solver: solving is delegated to user-provided
+ * integrations (2Captcha, CapSolver, CapMonster, self-hosted, ...). API keys
+ * and provider config live inside the user's implementation — never in SDK
+ * config. Honest caveats: solver services are external and usually paid, and a
+ * solved challenge does not guarantee access — IP reputation, TLS
+ * fingerprinting, and rate limits still apply.
+ */
+export interface CaptchaSolver {
+  /**
+   * Solve a detected challenge.
+   *
+   * @param challenge The detected challenge page data.
+   * @param options.signal The caller's abort signal — honor it.
+   * @returns Credentials to retry the request with.
+   */
+  solve(challenge: CaptchaChallenge, options: { signal?: AbortSignal }): Promise<CaptchaSolution>;
+}
+
 /** Options controlling a single HTTP fetch. */
 export interface FetchHtmlOptions {
   /** Override the User-Agent header. */
@@ -166,8 +301,37 @@ export interface FetchHtmlOptions {
    * with `serializePerOrigin: false` there is no queue and no pacing (the same
    * caveat as `Crawl-delay`, which is also honoured per request rather than
    * between them once serialization is off).
+   *
+   * Accepts a {@link RequestDelay}: a fixed number of milliseconds, or a
+   * `{ min, max }` range sampled uniformly at random per request.
    */
-  requestDelay?: number;
+  requestDelay?: RequestDelay;
+  /**
+   * Opt-in stealth behaviour. `false`/absent (the default) keeps the honest,
+   * identifiable `scrape-sdk/<version>` User-Agent and minimal headers.
+   * `true` enables sensible defaults (a modern desktop Chrome profile);
+   * a {@link StealthOptions} object gives control.
+   *
+   * Stealth is HTTP-layer only — see {@link StealthOptions} for what it covers
+   * and what it cannot do (TLS/HTTP2 fingerprints, JS-rendered challenges, IP
+   * reputation). When called directly on {@link fetchHtmlOnce}, only the
+   * browser header profile applies — the cookie jar and referer chain are
+   * per-`createScraper` state and live one layer up.
+   */
+  stealth?: boolean | StealthOptions;
+  /**
+   * Pluggable CAPTCHA solver. When set and a challenge page is detected in a
+   * response (Cloudflare interstitial markers, Turnstile/reCAPTCHA/hCaptcha
+   * widgets), the solver is invoked once and the request is retried ONCE with
+   * the returned {@link CaptchaSolution}. Without a solver, challenge pages
+   * surface normally (the page HTML, or an {@link HttpError} for error
+   * statuses). A throwing solver is wrapped in {@link ConfigError} — it is a
+   * user callback, like `transform`.
+   *
+   * See {@link CaptchaSolver} for the honesty caveats: solvers are external
+   * services and a solved challenge is not guaranteed access.
+   */
+  solver?: CaptchaSolver;
   /** Throw an {@link HttpError} on non-2xx responses. Defaults to true. */
   throwOnHttpError?: boolean;
   /** Abort signal. */
@@ -218,7 +382,14 @@ export interface ScraperOptions {
   /** Instance default for {@link FetchHtmlOptions.serializePerOrigin}. */
   serializePerOrigin?: boolean;
   /** Instance default for {@link FetchHtmlOptions.requestDelay}. */
-  requestDelay?: number;
+  requestDelay?: RequestDelay;
+  /**
+   * Instance default for {@link FetchHtmlOptions.stealth}. The scraper holds
+   * the stealth state (cookie jar, referer chain) shared across its calls.
+   */
+  stealth?: boolean | StealthOptions;
+  /** Instance default for {@link FetchHtmlOptions.solver}. */
+  solver?: CaptchaSolver;
   /**
    * Cap on requests in flight across ALL origins. A per-call value can only
    * lower the effective parallelism, never raise it above this cap.

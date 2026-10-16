@@ -1,10 +1,17 @@
 import { describe, expectTypeOf, it } from "vitest";
 import type {
+  CaptchaChallenge,
+  CaptchaSolution,
+  CaptchaSolver,
   ExtractResult,
+  FetchHtmlOptions,
   FetchHtmlResult,
   FieldSpec,
   FieldSpecRecord,
   FieldValue,
+  RequestDelay,
+  ScraperOptions,
+  StealthOptions,
 } from "../src/index.js";
 import { fetchHtml, scrape } from "../src/index.js";
 
@@ -146,5 +153,31 @@ describe("type inference", () => {
     const stub = async () => new Response("<html></html>", { status: 200 });
     const result = await fetchHtml("https://example.com/x", { fetch: stub, robots: false });
     expectTypeOf(result).toEqualTypeOf<FetchHtmlResult>();
+  });
+
+  it("stealth accepts boolean | StealthOptions at both option levels", () => {
+    expectTypeOf<FetchHtmlOptions["stealth"]>().toEqualTypeOf<
+      boolean | StealthOptions | undefined
+    >();
+    expectTypeOf<ScraperOptions["stealth"]>().toEqualTypeOf<boolean | StealthOptions | undefined>();
+    expectTypeOf<StealthOptions["browser"]>().toEqualTypeOf<
+      "chrome" | "firefox" | "safari" | undefined
+    >();
+  });
+
+  it("requestDelay accepts a fixed number or a { min, max } range", () => {
+    expectTypeOf<FetchHtmlOptions["requestDelay"]>().toEqualTypeOf<RequestDelay | undefined>();
+    expectTypeOf<ScraperOptions["requestDelay"]>().toEqualTypeOf<RequestDelay | undefined>();
+    expectTypeOf<RequestDelay>().toEqualTypeOf<number | { min: number; max: number }>();
+  });
+
+  it("exposes the pluggable solver contract", () => {
+    expectTypeOf<FetchHtmlOptions["solver"]>().toEqualTypeOf<CaptchaSolver | undefined>();
+    expectTypeOf<ScraperOptions["solver"]>().toEqualTypeOf<CaptchaSolver | undefined>();
+    expectTypeOf<CaptchaChallenge["type"]>().toEqualTypeOf<
+      "turnstile" | "recaptcha" | "hcaptcha" | "cloudflare-interstitial"
+    >();
+    expectTypeOf<CaptchaSolution["cookies"]>().toEqualTypeOf<Record<string, string> | undefined>();
+    expectTypeOf<CaptchaSolver["solve"]>().toBeFunction();
   });
 });

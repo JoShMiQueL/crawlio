@@ -1,5 +1,6 @@
 import pLimit from "p-limit";
 import pRetry from "p-retry";
+import { detectChallenge } from "./captcha.js";
 import {
   ConfigError,
   FetchError,
@@ -13,12 +14,21 @@ import { extract, extractAll } from "./extract.js";
 import { DEFAULT_RETRIES, DEFAULT_TIMEOUT, DEFAULT_USER_AGENT, fetchHtmlOnce } from "./fetch.js";
 import { parseHtml } from "./parse.js";
 import { fetchRobotsTxtResult, type RobotsAgent, robotsAllowed, robotsUrlFor } from "./robots.js";
+import {
+  CookieJar,
+  headerKey,
+  resolveStealth,
+  setCookieHeaders,
+  stealthRequestHeaders,
+} from "./stealth.js";
 import type {
+  CaptchaSolution,
   ExtractOptions,
   ExtractResult,
   FetchHtmlOptions,
   FetchHtmlResult,
   FieldSpecRecord,
+  RequestDelay,
   ScrapeBatchItem,
   ScrapeOptions,
   Scraper,
@@ -30,6 +40,34 @@ const DEFAULT_CONCURRENCY = 4;
 const MAX_CRAWL_DELAY_MS = 30_000;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Sample this request's pacing gap: a fixed `number` returns as-is; a
+ * `{ min, max }` range draws uniformly in `[min, max]` — re-sampled on every
+ * call, so request cadence is not a metronome.
+ */
+function sampleRequestDelay(delay: RequestDelay | undefined): number {
+  if (delay === undefined || typeof delay === "number") return delay ?? 0;
+  return delay.min + Math.random() * (delay.max - delay.min);
+}
+
+/**
+ * Whether `delay` is a valid {@link RequestDelay}: a non-negative finite
+ * number, or a `{ min, max }` range with `0 <= min <= max`, both finite.
+ * Anything else (negative, NaN/Infinity, malformed range, wrong runtime type)
+ * is a {@link ConfigError}.
+ */
+function isValidRequestDelay(delay: RequestDelay | undefined): boolean {
+  if (delay === undefined) return true;
+  if (typeof delay === "number") return Number.isFinite(delay) && delay >= 0;
+  if (typeof delay !== "object" || delay === null) return false;
+  return (
+    Number.isFinite(delay.min) &&
+    delay.min >= 0 &&
+    Number.isFinite(delay.max) &&
+    delay.max >= delay.min
+  );
+}
 
 /**
  * Whether a failure is worth retrying. `p-retry` already short-circuits plain
@@ -60,7 +98,9 @@ function shouldRetry(error: unknown): boolean {
  * - a per-origin `robots.txt` cache (fetched once, deduplicated as a Promise);
  * - a per-origin serial queue, so one origin is never hit twice concurrently
  *   (bypassed when `serializePerOrigin` is false);
- * - a global `p-limit` concurrency cap wrapping the per-origin queues.
+ * - a global `p-limit` concurrency cap wrapping the per-origin queues;
+ * - stealth state (per-origin cookie jar + last-visited-URL referer chain),
+ *   only consulted on calls where `stealth` resolves on.
  *
  * Defaults set here are merged *under* per-call options — a call-level option
  * always wins, and `userAgent`, `timeout`, `retries`, `robots`,
@@ -80,6 +120,8 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     serializePerOrigin: options.serializePerOrigin ?? true,
     requestDelay: options.requestDelay ?? 0,
     concurrency: Math.max(1, options.concurrency ?? DEFAULT_CONCURRENCY),
+    stealth: options.stealth,
+    solver: options.solver,
     fetch: options.fetch,
   };
   const limit = pLimit(defaults.concurrency);
@@ -89,6 +131,12 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
   const robotsCache = new Map<string, Promise<RobotsAgent | null>>();
   const robotsKeys = new Map<string, { userAgent: string; fetch: typeof globalThis.fetch }>();
   const originQueues = new Map<string, Promise<void>>();
+  // Stealth state, per scraper instance (see createScraper docs): the jar is
+  // only read/written on calls where stealth's `cookies` is on, and the referer
+  // chain likewise only when `refererChain` is on — the honest default path
+  // never touches either.
+  const cookieJar = new CookieJar();
+  const lastUrlByOrigin = new Map<string, string>();
 
   const fetchImpl: typeof globalThis.fetch = defaults.fetch ?? globalThis.fetch;
 
@@ -105,6 +153,8 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
       robots: call?.robots ?? defaults.robots,
       serializePerOrigin: call?.serializePerOrigin ?? defaults.serializePerOrigin,
       requestDelay: call?.requestDelay ?? defaults.requestDelay,
+      stealth: call?.stealth ?? defaults.stealth,
+      solver: call?.solver ?? defaults.solver,
       throwOnHttpError: call?.throwOnHttpError ?? true,
       signal: call?.signal,
       fetch: call?.fetch ?? defaults.fetch,
@@ -208,7 +258,16 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
       throw new ConfigError(`Invalid URL ${scrubUrl(String(url))}`, { cause });
     }
     const origin = target.origin;
-    const userAgent = merged.userAgent ?? DEFAULT_USER_AGENT;
+    const stealth = resolveStealth(merged.stealth);
+    // The UA actually sent on the wire: an explicit userAgent wins (per-call
+    // over instance); under stealth the profile's UA is the fallback so robots
+    // matching sees the same UA the request sends.
+    const explicitUserAgent = call?.userAgent ?? options.userAgent;
+    const userAgent =
+      explicitUserAgent ??
+      (stealth === null
+        ? DEFAULT_USER_AGENT
+        : (stealthRequestHeaders(stealth)["user-agent"] ?? DEFAULT_USER_AGENT));
     const effectiveFetch = merged.fetch ?? fetchImpl;
     // p-retry short-circuits a pre-aborted signal with a raw AbortError; wrap it
     // here so every error leaving the SDK is a ScrapeError (see errors.ts).
@@ -230,12 +289,13 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
         url: target.toString(),
       });
     }
-    if (
-      merged.requestDelay !== undefined &&
-      (!Number.isFinite(merged.requestDelay) || merged.requestDelay < 0)
-    ) {
+    if (!isValidRequestDelay(merged.requestDelay)) {
+      const shown =
+        typeof merged.requestDelay === "object"
+          ? JSON.stringify(merged.requestDelay)
+          : String(merged.requestDelay);
       throw new ConfigError(
-        `\`requestDelay\` must be a non-negative finite number, got ${merged.requestDelay}`,
+        `\`requestDelay\` must be a non-negative finite number or a \`{ min, max }\` range with 0 <= min <= max, got ${shown}`,
         { url: target.toString() },
       );
     }
@@ -246,7 +306,199 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     const schedule: <T>(task: () => Promise<T>) => Promise<T> =
       merged.serializePerOrigin === false
         ? (task) => task()
-        : (task) => enqueueOnOrigin(origin, task, merged.requestDelay ?? 0);
+        : (task) => enqueueOnOrigin(origin, task, sampleRequestDelay(merged.requestDelay));
+
+    /**
+     * Merge the stealth-state headers (cookie jar, referer chain) into the
+     * caller's header bag for one attempt. Caller headers win: an explicit
+     * `referer` suppresses the chain, and an explicit `cookie` is APPENDED to
+     * the jar's cookies (`jar; caller`) rather than replaced.
+     *
+     * `extraCookies` are one-shot cookie pairs applied to this attempt only
+     * (solver-provided cookies when the jar is off); when the jar is on they
+     * are stored into it instead and arrive through the jar.
+     */
+    const wireHeaders = (
+      extraCookies?: Record<string, string>,
+    ): Record<string, string> | undefined => {
+      if (stealth === null && extraCookies === undefined) return merged.headers;
+      const headers: Record<string, string> = { ...merged.headers };
+      const cookieParts: string[] = [];
+      if (stealth?.cookies === true) {
+        const jarHeader = cookieJar.cookieHeaderFor(target);
+        if (jarHeader !== undefined) cookieParts.push(jarHeader);
+      }
+      if (extraCookies !== undefined) {
+        for (const [name, value] of Object.entries(extraCookies)) {
+          cookieParts.push(`${name}=${value}`);
+        }
+      }
+      if (cookieParts.length > 0) {
+        // Merge into the caller's own Cookie header — never clobber it.
+        const cookieKey = headerKey(headers, "cookie") ?? "cookie";
+        headers[cookieKey] =
+          headers[cookieKey] === undefined
+            ? cookieParts.join("; ")
+            : `${cookieParts.join("; ")}; ${headers[cookieKey]}`;
+      }
+      // A caller-set `referer` skips the whole block intentionally: their
+      // header wins WHOLESALE, including the sec-fetch-site we would have
+      // paired with it (their Referer + the profile's `sec-fetch-site: none`
+      // may tell a mismatched story — that inconsistency is then the caller's
+      // responsibility, per the StealthOptions docs).
+      if (stealth?.refererChain === true && headerKey(headers, "referer") === undefined) {
+        const last = lastUrlByOrigin.get(target.origin);
+        if (last !== undefined) {
+          headers.referer = last;
+          // Same-origin navigation, not a typed-URL visit — the fetch metadata
+          // must tell the same story the Referer does. Safari sends NO Fetch
+          // Metadata, so its profile stays silent here too.
+          if (stealth.browser !== "safari" && headerKey(headers, "sec-fetch-site") === undefined) {
+            headers["sec-fetch-site"] = "same-origin";
+          }
+        }
+      }
+      return headers;
+    };
+
+    /**
+     * Record a completed response into the stealth state: jar the `Set-Cookie`
+     * headers and remember the URL as the last same-origin page — keyed by the
+     * RESPONSE's origin so a cross-origin redirect chains correctly. No-op when
+     * stealth is off.
+     *
+     * Known asymmetry: only COMPLETED responses are recorded. When
+     * `fetchHtmlOnce` throws {@link HttpError} (the no-solver path), any
+     * `Set-Cookie` on that error page is dropped and the referer chain skips
+     * it — a real browser would store them. Deliberate: {@link HttpError}
+     * carries no headers, and smuggling them through the error path would add
+     * plumbing for marginal fidelity.
+     */
+    const recordResponse = (result: FetchHtmlResult): void => {
+      if (stealth === null) return;
+      let responseOrigin = origin;
+      try {
+        responseOrigin = new URL(result.url).origin;
+      } catch {
+        // Unparseable response URL — fall back to the request's origin.
+      }
+      if (stealth.cookies) {
+        cookieJar.storeResponseCookies(responseOrigin, setCookieHeaders(result.headers));
+      }
+      if (stealth.refererChain) {
+        lastUrlByOrigin.set(responseOrigin, result.url);
+      }
+    };
+
+    const solverConfigured = merged.solver !== undefined;
+
+    /**
+     * Re-apply `throwOnHttpError` semantics for the solver path: with a solver
+     * configured, responses are fetched with throwing suppressed so a
+     * challenge body's markers can be inspected — a still-failing response
+     * must surface as the same {@link HttpError} it would have without a
+     * solver.
+     */
+    const finalize = (result: FetchHtmlResult): FetchHtmlResult => {
+      if (
+        solverConfigured &&
+        merged.throwOnHttpError !== false &&
+        (result.status < 200 || result.status >= 300)
+      ) {
+        throw new HttpError(`HTTP ${result.status} ${result.statusText}`.trim(), {
+          url: target.toString(),
+          status: result.status,
+          statusText: result.statusText,
+        });
+      }
+      return result;
+    };
+
+    let solverAttempted = false;
+
+    /**
+     * One wire attempt: fetch, record stealth state, and — when a challenge is
+     * detected and a solver is configured — solve once and retry the SAME
+     * request once with the returned credentials (`solverUsed` is the
+     * never-infinite-retry guard: one solver attempt per call, and the guard
+     * also spans p-retry attempts).
+     */
+    const attemptOnce = async (): Promise<FetchHtmlResult> => {
+      const result = await fetchHtmlOnce(
+        target.toString(),
+        {
+          ...merged,
+          userAgent: explicitUserAgent,
+          headers: wireHeaders(),
+          // Suppress HttpError only while a solver may need the body.
+          throwOnHttpError: solverConfigured ? false : merged.throwOnHttpError,
+        },
+        effectiveFetch,
+      );
+      recordResponse(result);
+
+      if (!solverConfigured || solverAttempted) return finalize(result);
+      const solver = merged.solver;
+      if (solver === undefined) return finalize(result);
+      const challenge = detectChallenge({
+        url: result.url,
+        status: result.status,
+        headers: result.headers,
+        html: result.html,
+      });
+      if (challenge === null) return finalize(result);
+      solverAttempted = true;
+
+      let solution: CaptchaSolution;
+      try {
+        solution = await solver.solve(challenge, { signal: merged.signal });
+      } catch (cause) {
+        // A solver is a user callback: an abort surfaces as FetchError (same
+        // contract as the fetch itself); anything else is wrapped so every
+        // SDK-thrown error stays a ScrapeError.
+        if (cause instanceof DOMException && cause.name === "AbortError") {
+          throw new FetchError("Request aborted by caller", {
+            url: target.toString(),
+            cause,
+          });
+        }
+        throw new ConfigError("Captcha solver failed", { url: target.toString(), cause });
+      }
+
+      // Solution cookies are ALWAYS recorded in the jar — it is the
+      // persistence channel, so a clearance solved once surfaces on any later
+      // request whose options enable stealth cookies. On THIS retry they
+      // arrive via the jar when enabled, else via a one-shot Cookie header.
+      const solutionCookies = solution.cookies;
+      if (solutionCookies !== undefined) {
+        for (const [name, value] of Object.entries(solutionCookies)) {
+          cookieJar.set(target.origin, name, value);
+        }
+      }
+      // Copy: wireHeaders can return the caller's `headers` object by
+      // reference — writing the solution UA into it would mutate user input
+      // and leak the UA into any later call reusing that object.
+      const retryHeaders = {
+        ...(wireHeaders(stealth?.cookies === true ? undefined : solutionCookies) ?? {}),
+      };
+      if (solution.userAgent !== undefined) {
+        // A solution is bound to the UA that produced it — it MUST win, over
+        // the profile and over the caller's own user-agent header.
+        retryHeaders[headerKey(retryHeaders, "user-agent") ?? "user-agent"] = solution.userAgent;
+      }
+      const retried = await fetchHtmlOnce(
+        target.toString(),
+        {
+          ...merged,
+          userAgent: solution.userAgent ?? explicitUserAgent,
+          headers: retryHeaders,
+          throwOnHttpError: false,
+        },
+        effectiveFetch,
+      );
+      recordResponse(retried);
+      return finalize(retried);
+    };
 
     return schedule(async () => {
       // The robots check runs inside the global cap so a burst over many fresh
@@ -282,7 +534,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
           return await pRetry(
             async () => {
               if (crawlDelayMs > 0) await sleep(crawlDelayMs);
-              return fetchHtmlOnce(target.toString(), merged, effectiveFetch);
+              return attemptOnce();
             },
             {
               retries: merged.retries ?? DEFAULT_RETRIES,

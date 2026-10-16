@@ -30,6 +30,9 @@ export {
   scrapeManySafe,
 } from "./scraper.js";
 export type {
+  CaptchaChallenge,
+  CaptchaSolution,
+  CaptchaSolver,
   ExtractOptions,
   ExtractResult,
   FetchHtmlOptions,
@@ -38,9 +41,11 @@ export type {
   FieldSpecRecord,
   FieldValue,
   ParseOptions,
+  RequestDelay,
   ScrapeBatchItem,
   ScrapeOptions,
   Scraper,
   ScraperOptions,
+  StealthOptions,
 } from "./types.js";
 export { VERSION } from "./version.js";
