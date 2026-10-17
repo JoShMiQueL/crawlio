@@ -167,47 +167,47 @@ importers:
   .:
     dependencies:
       cheerio:
-        specifier: ^1.2.0
+        specifier: 1.2.0
         version: 1.2.0
       p-limit:
-        specifier: ^7.3.3
+        specifier: 7.3.3
         version: 7.3.3
       p-retry:
-        specifier: ^8.0.1
+        specifier: 8.0.1
         version: 8.0.1
       robots-parser:
-        specifier: ^3.0.1
+        specifier: 3.0.1
         version: 3.0.1
       undici:
         specifier: 8.12.2
         version: 8.12.2
     devDependencies:
       '@arethetypeswrong/cli':
-        specifier: ^0.18.5
+        specifier: 0.18.5
         version: 0.18.5
       '@biomejs/biome':
-        specifier: ^2.5.15
+        specifier: 2.5.15
         version: 2.5.15
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
         version: 1.32.1(supports-color@7.2.0)(zod@4.6.7)
       '@types/node':
-        specifier: ^26.0.0
+        specifier: 26.6.5
         version: 26.6.5
       playwright-core:
-        specifier: ^1.64.1
+        specifier: 1.64.1
         version: 1.64.1
       publint:
-        specifier: ^0.3.25
+        specifier: 0.3.25
         version: 0.3.25
       puppeteer-core:
         specifier: 25.13.0
         version: 25.13.0
       typescript:
-        specifier: ^5.9.3
+        specifier: 5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^5.0.5
+        specifier: 5.0.5
         version: 5.0.5(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5))
 
 packages:

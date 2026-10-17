@@ -6,6 +6,7 @@ import {
   assertEngineName,
   detectPackageManager,
   installCommands,
+  mcpInstallCommand,
   packageManagerFromField,
   parseCount,
   parseFieldsSpec,
@@ -334,5 +335,27 @@ describe("installCommands — the crawlio install plan", () => {
       { command: "yarn", args: ["add", "-D", "playwright-core"] },
       { command: "yarn", args: ["dlx", "playwright-core", "install", "chromium"] },
     ]);
+  });
+
+  it("--mcp: runtime-adds @modelcontextprotocol/sdk (no dev flag) per pm", () => {
+    // The SDK runs inside the user's crawlio-mcp/crawlio/mcp process — a
+    // runtime dep, so the dev-install spellings (`-D`/`--save-dev`/`-d`)
+    // must NOT appear.
+    expect(mcpInstallCommand("npm")).toEqual({
+      command: "npm",
+      args: ["install", "@modelcontextprotocol/sdk"],
+    });
+    expect(mcpInstallCommand("pnpm")).toEqual({
+      command: "pnpm",
+      args: ["add", "@modelcontextprotocol/sdk"],
+    });
+    expect(mcpInstallCommand("bun")).toEqual({
+      command: "bun",
+      args: ["add", "@modelcontextprotocol/sdk"],
+    });
+    expect(mcpInstallCommand("yarn")).toEqual({
+      command: "yarn",
+      args: ["add", "@modelcontextprotocol/sdk"],
+    });
   });
 });

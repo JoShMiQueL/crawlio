@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigError } from "../src/index.js";
+import * as mcpSubpath from "../src/mcp-server.js";
 import { createCrawlioMcpServer } from "../src/mcp-server.js";
 import {
   type ClosableRenderer,
@@ -409,6 +410,20 @@ describe("createCrawlioTools — tool handlers", () => {
     const tools = makeTools({ env: {} });
     const data = resultJson(await tools.call("search", { query: "crawlio", limit: 0 }));
     expect(data).toEqual([]);
+  });
+});
+
+describe("the `crawlio/mcp` subpath module — the embeddable surface", () => {
+  it("re-exports the whole tool layer from mcp-server.js", () => {
+    // src/mcp-server.js is what `./mcp` in package.json exports points at —
+    // pin that every embeddable helper is reachable through it (the
+    // type-only exports — CrawlioTools, McpToolDefinition, ... — are
+    // compile-time surface and cannot be asserted at runtime).
+    expect(mcpSubpath.createCrawlioMcpServer).toBe(createCrawlioMcpServer);
+    expect(mcpSubpath.createCrawlioTools).toBe(createCrawlioTools);
+    expect(mcpSubpath.resolveEnvRenderer).toBe(resolveEnvRenderer);
+    expect(mcpSubpath.resolveMcpSearchProvider).toBe(resolveMcpSearchProvider);
+    expect(mcpSubpath.parseJsonFields).toBe(parseJsonFields);
   });
 });
 

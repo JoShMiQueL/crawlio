@@ -4,15 +4,33 @@
  *
  * `@modelcontextprotocol/sdk` is an OPTIONAL peer dependency — it is
  * `import()`ed lazily here and nowhere else, so `import crawlio` (and the
- * `mcp-tools.js` helpers) never load it. This module is internal: the
- * server's only public surface is the `crawlio-mcp` binary, there is no
- * MCP subpath export.
+ * `mcp-tools.js` helpers) never load it. This module is the `crawlio/mcp`
+ * subpath export — the programmatic surface the `crawlio-mcp` binary is
+ * built on; importing it works without the peer installed, and a missing
+ * SDK only fails inside {@link createCrawlioMcpServer}.
  */
 import type { Server } from "@modelcontextprotocol/sdk/server";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ConfigError } from "./errors.js";
 import { type CrawlioTools, type CrawlioToolsDeps, createCrawlioTools } from "./mcp-tools.js";
 import { VERSION } from "./version.js";
+
+// The `crawlio/mcp` subpath is this module — re-export the tool layer so
+// embedders get the full surface (tools + resolvers + types) from the one
+// entrypoint, without touching `mcp-tools.js` internals.
+export type {
+  ClosableRenderer,
+  CrawlioTools,
+  CrawlioToolsDeps,
+  McpToolDefinition,
+  McpToolResult,
+} from "./mcp-tools.js";
+export {
+  createCrawlioTools,
+  parseJsonFields,
+  resolveEnvRenderer,
+  resolveMcpSearchProvider,
+} from "./mcp-tools.js";
 
 /** The pieces {@link createCrawlioMcpServer} wires together. */
 export interface CrawlioMcpServer {

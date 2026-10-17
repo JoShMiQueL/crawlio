@@ -524,26 +524,34 @@ export interface InstallCommand {
 }
 
 /**
- * Per-manager spellings for {@link installCommands}: `add` dev-installs a
- * package; `dlx` is the idiomatic npx-equivalent that runs a package's CLI
- * without installing it — `npx` for npm, `pnpm dlx` for pnpm, `bunx` for
- * bun, `yarn dlx` for yarn.
+ * Per-manager spellings for {@link installCommands} and
+ * {@link mcpInstallCommand}: `add` dev-installs a package; `addRuntime`
+ * installs it as a runtime dependency; `dlx` is the idiomatic
+ * npx-equivalent that runs a package's CLI without installing it — `npx`
+ * for npm, `pnpm dlx` for pnpm, `bunx` for bun, `yarn dlx` for yarn.
  */
-const PM_COMMANDS: Record<PackageManager, { add: InstallCommand; dlx: InstallCommand }> = {
+const PM_COMMANDS: Record<
+  PackageManager,
+  { add: InstallCommand; addRuntime: InstallCommand; dlx: InstallCommand }
+> = {
   npm: {
     add: { command: "npm", args: ["install", "--save-dev"] },
+    addRuntime: { command: "npm", args: ["install"] },
     dlx: { command: "npx", args: [] },
   },
   pnpm: {
     add: { command: "pnpm", args: ["add", "-D"] },
+    addRuntime: { command: "pnpm", args: ["add"] },
     dlx: { command: "pnpm", args: ["dlx"] },
   },
   bun: {
     add: { command: "bun", args: ["add", "-d"] },
+    addRuntime: { command: "bun", args: ["add"] },
     dlx: { command: "bunx", args: [] },
   },
   yarn: {
     add: { command: "yarn", args: ["add", "-D"] },
+    addRuntime: { command: "yarn", args: ["add"] },
     dlx: { command: "yarn", args: ["dlx"] },
   },
 };
@@ -577,4 +585,16 @@ export function installCommands(
     { command: add.command, args: [...add.args, "puppeteer-core"] },
     { command: dlx.command, args: [...dlx.args, "puppeteer", "browsers", "install", "chrome"] },
   ];
+}
+
+/**
+ * The `crawlio install --mcp` plan — a single `<pm> add
+ * @modelcontextprotocol/sdk` step. Unlike the engine packages it is a
+ * RUNTIME dependency (`addRuntime`, no `-D`): the package's `Server` runs
+ * inside the user's own `crawlio-mcp`/`crawlio/mcp` process, not just at
+ * development time.
+ */
+export function mcpInstallCommand(pm: PackageManager): InstallCommand {
+  const { addRuntime } = PM_COMMANDS[pm];
+  return { command: addRuntime.command, args: [...addRuntime.args, "@modelcontextprotocol/sdk"] };
 }

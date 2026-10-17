@@ -249,7 +249,11 @@ crawlio --help | --version
   (`npm i -D`, `pnpm add -D`, `bun add -d`, `yarn add -D`), then runs the
   pm's npx-equivalent (`npx`, `pnpm dlx`, `bunx`, `yarn dlx`) for
   `playwright-core install <browser>` or `puppeteer browsers install
-  chrome`. `--dry-run` prints the plan without running it.
+  chrome`. `--mcp` instead runtime-installs `@modelcontextprotocol/sdk`
+  (`pnpm add`, no `-D` — the `crawlio-mcp`/`crawlio/mcp` peer dep runs
+  inside your own server process); alone it is the whole plan, combined
+  with `--engine`/`--browser` it is appended. `--dry-run` prints the plan
+  without running it.
 
 Errors go to stderr with exit code 1.
 
@@ -259,8 +263,12 @@ Errors go to stderr with exit code 1.
 over stdio. It needs the optional peer `@modelcontextprotocol/sdk`:
 
 ```sh
-pnpm add crawlio @modelcontextprotocol/sdk
+pnpm add crawlio && crawlio install --mcp
 ```
+
+(`crawlio install --mcp` just runs `pnpm add @modelcontextprotocol/sdk`
+through the detected package manager — a runtime dependency, not `-D` —
+so installing the SDK directly yourself is the same thing.)
 
 Claude Desktop config (`claude_desktop_config.json`):
 
@@ -308,6 +316,29 @@ Without any renderer env, `scrape` never renders and a `render` argument
 errors. With one configured, `render` defaults to `"auto"`; `"always"`
 skips the static fetch. One lazy renderer is shared by all tool calls and
 closed on shutdown.
+
+### Embedding programmatically
+
+The same layer the `crawlio-mcp` binary wires onto stdio is importable as
+`crawlio/mcp` — `createCrawlioMcpServer`, `createCrawlioTools`, the
+`resolveEnvRenderer`/`resolveMcpSearchProvider`/`parseJsonFields` helpers,
+and their types (`CrawlioMcpServer`, `CrawlioTools`, `CrawlioToolsDeps`,
+`McpToolDefinition`, `McpToolResult`, `ClosableRenderer`):
+
+```ts
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createCrawlioMcpServer } from "crawlio/mcp";
+
+const { server, tools } = await createCrawlioMcpServer();
+server.onclose = () => void tools.close().catch(() => undefined);
+await server.connect(new StdioServerTransport());
+```
+
+Like `crawlio/playwright` without `playwright-core`, `import "crawlio/mcp"`
+works with the peer absent — the SDK is only `import()`ed inside
+`createCrawlioMcpServer`, where a missing install surfaces as a
+`ConfigError`. `createCrawlioTools` (the transport-free tool layer) never
+touches it at all.
 
 ## Stealth (opt-in)
 

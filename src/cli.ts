@@ -8,7 +8,7 @@
  *   crawlio map <url> [--limit N]
  *   crawlio crawl <url> [--max-depth N] [--max-pages N]
  *   crawlio search <query> [--provider brave|serper|tavily|module] [--api-key <key>] [--limit N] [--json]
- *   crawlio install [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--dry-run]
+ *   crawlio install [--mcp] [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--dry-run]
  */
 import { spawn } from "node:child_process";
 import { parseArgs } from "node:util";
@@ -19,6 +19,7 @@ import {
   type InstallCommand,
   installCommands,
   loadRendererAdapter,
+  mcpInstallCommand,
   parseCount,
   parseFieldsSpec,
   rejectRenderOnlyFlags,
@@ -104,6 +105,10 @@ search options:
   --limit N              Maximum results returned.
 
 install options:
+  --mcp                  Runtime-install @modelcontextprotocol/sdk — the
+                         crawlio-mcp / crawlio/mcp peer dep. Alone it is the
+                         whole plan; combined with --engine/--browser it is
+                         appended to the engine install.
   --engine playwright|puppeteer   Engine to install (default playwright).
   --browser chromium|firefox|webkit   Playwright browser (default chromium).
   --dry-run              Print the commands without running them.
@@ -242,6 +247,7 @@ async function main(argv: string[]): Promise<number> {
       "max-depth": { type: "string" },
       "max-pages": { type: "string" },
       json: { type: "boolean", default: false },
+      mcp: { type: "boolean", default: false },
       "dry-run": { type: "boolean", default: false },
     },
   });
@@ -334,15 +340,27 @@ async function main(argv: string[]): Promise<number> {
     case "install": {
       rejectSearchOnlyFlags(values, "install");
       rejectRenderOnlyFlags(values, "install");
+      // `--mcp` alone installs just the MCP SDK peer; combined with
+      // --engine/--browser it is appended to the engine plan. No flags at
+      // all keeps the default engine install.
+      const wantsEngine =
+        !values.mcp || values.engine !== undefined || values.browser !== undefined;
       const engine = assertEngineName(values.engine ?? "playwright");
       const browser = values.browser ?? "chromium";
-      if (engine === "playwright" && !["chromium", "firefox", "webkit"].includes(browser)) {
+      if (
+        wantsEngine &&
+        engine === "playwright" &&
+        !["chromium", "firefox", "webkit"].includes(browser)
+      ) {
         throw new ConfigError(
           `\`--browser\` must be "chromium", "firefox" or "webkit", got ${JSON.stringify(browser)}`,
         );
       }
       const pm = detectPackageManager(process.cwd());
-      const commands = installCommands(engine, browser, pm);
+      const commands = [
+        ...(wantsEngine ? installCommands(engine, browser, pm) : []),
+        ...(values.mcp ? [mcpInstallCommand(pm)] : []),
+      ];
       process.stdout.write(`Detected package manager: ${pm}\n`);
       for (const cmd of commands) {
         const line = `${cmd.command} ${cmd.args.join(" ")}`;
@@ -353,7 +371,7 @@ async function main(argv: string[]): Promise<number> {
           await runCommand(cmd);
         }
       }
-      if (engine === "puppeteer" && !values["dry-run"]) {
+      if (wantsEngine && engine === "puppeteer" && !values["dry-run"]) {
         process.stdout.write(
           "Note: `puppeteer-core` resolves a system Chrome via `channel`/`executablePath` — the download above registers `chrome` for `@puppeteer/browsers`.\n",
         );
