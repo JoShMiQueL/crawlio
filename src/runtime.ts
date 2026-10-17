@@ -55,6 +55,27 @@ declare global {
 
     /** The fetch-style HTTP server — the dual-runtime swap for `node:http`. */
     function serve(options: ServeOptions): Server;
+
+    /** Constructor options for {@link FetchSession}. */
+    interface FetchSessionOptions {
+      /**
+       * Proxy URL every request on the session exits through — same
+       * credentials-in-URL convention as the `proxy` fetch option.
+       */
+      proxy?: string;
+    }
+
+    /**
+     * A pooled HTTP client session (Bun ≥1.4.3): a dedicated
+     * keep-alive/TLS/proxy connection pool with an explicit `close()` —
+     * the Bun-side counterpart of a per-URL undici `ProxyAgent` (proxy.ts).
+     */
+    class FetchSession {
+      constructor(options?: FetchSessionOptions);
+      fetch(input: Request | string | URL, init?: RequestInit): Promise<Response>;
+      /** Drain the session's pools; a later `fetch` reopens them lazily. */
+      close(): void;
+    }
   }
 }
 

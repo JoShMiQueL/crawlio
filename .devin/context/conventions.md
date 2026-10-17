@@ -7,7 +7,7 @@ Items marked **[decided]** are project policy for a scraping SDK. The stack belo
 
 ## Stack
 - **[decided]** TypeScript `^5.9.3` (deliberately NOT TypeScript 7 — no JS compiler API yet), `tsc` only with **no bundler** (no tsdown/tsup/rollup/esbuild), ESM-only (`"type": "module"`, `module`/`moduleResolution: nodenext`), Node `>=22`.
-- **[decided]** Package manager: **pnpm** (`packageManager: pnpm@12.14.0`).
+- **[decided]** Package manager / toolchain: **bun** (`packageManager: bun@1.4.3`, `bun.lock` canonical). The LIBRARY stays dual-runtime — Node consumers are first-class; node lanes verify via `npm run`/`npx`.
 - **[decided]** Lint + format: `@biomejs/biome` `^2.5.15`. Biome does **not** typecheck — `tsc --noEmit` is the typecheck step.
 - **[decided]** Tests: `vitest` `^5.0.5`. Also dev-only tooling: `publint`, `@arethetypeswrong/cli`, `@types/node`.
 
@@ -22,12 +22,12 @@ Items marked **[decided]** are project policy for a scraping SDK. The stack belo
 - **[decided]** `test/` — vitest specs, plus `test/fixtures.ts` (fixture loader). Not in the `tsconfig.json` project, but they **are** typechecked by `tsconfig.test.json`.
 - **[decided]** Root config: `biome.json` and `package.json` scripts, plus **three** tsconfigs:
   - `tsconfig.json` — base; `include: ["src"]` only.
-  - `tsconfig.test.json` — extends base; `include: ["src", "test"]`, `noEmit`; run by `pnpm typecheck` and `pnpm test:types`. This is how the test files get typechecked.
-  - `tsconfig.build.json` — extends base; excludes `dist`, `node_modules`, `src/**/*.test.ts`; emits `dist/` via `pnpm build`. Tests never ship.
+  - `tsconfig.test.json` — extends base; `include: ["src", "test"]`, `noEmit`; run by `bun run typecheck` and `bun run test:types`. This is how the test files get typechecked.
+  - `tsconfig.build.json` — extends base; excludes `dist`, `node_modules`, `src/**/*.test.ts`; emits `dist/` via `bun run build`. Tests never ship.
 - **[decided]** Fixtures for parser tests live alongside specs under `test/fixtures/` (recorded HTML, no network). Hand-written, never re-serialized through a parser.
 
 ## Style
-- **[decided]** Formatter/linter is Biome: `pnpm lint` (check) and `pnpm lint:fix` (write). 2-space indent, double quotes, line width 100.
+- **[decided]** Formatter/linter is Biome: `bun run lint` (check) and `bun run lint:fix` (write). 2-space indent, double quotes, line width 100.
 - **[decided]** Imports: ESM `NodeNext` — always relative **with the `.js` extension** (`./foo.js`), even when importing TS sources; `verbatimModuleSyntax` is on, so use `import type` for type-only imports.
 - **[decided]** Naming/import conventions: files are kebab-case; exported functions are camelCase; public types are named interfaces/types with explicit annotations (no `isolatedDeclarations`, but declaration emit must stay clean).
 

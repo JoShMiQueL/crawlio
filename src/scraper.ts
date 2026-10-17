@@ -14,7 +14,7 @@ import { extract, extractAll } from "./extract.js";
 import { DEFAULT_RETRIES, DEFAULT_TIMEOUT, DEFAULT_USER_AGENT, fetchHtmlOnce } from "./fetch.js";
 import { mapImpl } from "./map.js";
 import { parseHtml } from "./parse.js";
-import { PROXY_FETCH_CONFLICT, ProxyPool, type ProxyPoolOptions } from "./proxy.js";
+import { defaultFetch, PROXY_FETCH_CONFLICT, ProxyPool, type ProxyPoolOptions } from "./proxy.js";
 import { isLikelyDynamic, type RenderedPage } from "./render.js";
 import { withRetries } from "./retry.js";
 import { fetchRobotsTxtResult, type RobotsAgent, robotsAllowed, robotsUrlFor } from "./robots.js";
@@ -87,8 +87,8 @@ function wireUserAgent(
 
 /**
  * Sample this request's pacing gap: a fixed `number` returns as-is; a
- * `{ min, max }` range draws uniformly in `[min, max]` — re-sampled on every
- * call, so request cadence is not a metronome.
+ * `{ min, max }` range draws uniformly in `[min, max]`, re-sampled on every
+ * call.
  */
 function sampleRequestDelay(delay: RequestDelay | undefined): number {
   if (delay === undefined || typeof delay === "number") return delay ?? 0;
@@ -185,7 +185,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
   const cookieJar = new CookieJar();
   const lastUrlByOrigin = new Map<string, string>();
 
-  const fetchImpl: typeof globalThis.fetch = defaults.fetch ?? globalThis.fetch;
+  const fetchImpl: typeof globalThis.fetch = defaults.fetch ?? defaultFetch;
 
   function mergedOptions(call: FetchHtmlOptions | ScrapeOptions | undefined): FetchHtmlOptions & {
     baseUrl?: string | URL;
@@ -328,14 +328,18 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     // pool (bindings + health persist). `proxy` pins one proxy and wins over
     // `proxies` at the same level.
     const callProxyList = call?.proxy !== undefined ? [call.proxy] : call?.proxies;
-    const proxyPool =
+    // A per-call pool is OWNED by this call — it is closed when the call
+    // settles (see the finally at the bottom), releasing its pooled
+    // clients deterministically instead of waiting on idle cleanup.
+    const ownedPool =
       callProxyList === undefined
-        ? instancePool
+        ? null
         : new ProxyPool({
             proxies: callProxyList,
             rotation: merged.proxyRotation,
             ...proxyPoolHooks,
           });
+    const proxyPool = ownedPool ?? instancePool;
     if (proxyPool !== null && merged.fetch !== undefined) {
       throw new ConfigError(PROXY_FETCH_CONFLICT, { url: target.toString() });
     }
@@ -645,7 +649,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
       return finalize(retried);
     };
 
-    return schedule(async () => {
+    const scheduled = schedule(async () => {
       // The robots check runs inside the global cap so a burst over many fresh
       // origins cannot fire N unbounded robots.txt requests. It shares the
       // origin's serial queue — deliberate: robots.txt and page fetches are the
@@ -803,6 +807,15 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
         return staticResult;
       });
     });
+    // A per-call pool is stateless — it dies with this call, so close its
+    // pooled clients (undici `ProxyAgent` / `Bun.FetchSession`) when the
+    // call settles rather than leaving their keep-alive sockets to
+    // idle-timeout. `close()` settles best-effort and never rejects. The
+    // instance pool is the scraper's — it is NOT closed here.
+    if (ownedPool !== null) {
+      return scheduled.finally(() => ownedPool.close());
+    }
+    return scheduled;
   }
 
   /** Parse and extract from a fetched page. `baseUrl` defaults to the page URL. */
@@ -933,7 +946,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     scrapeManySafe: (urls, fields, opts) => scrapeManySafeImpl(urls, fields, opts),
     // map fetches robots.txt itself (for Sitemap: directives) OUTSIDE
     // fetchHtmlImpl, so the resolved instance defaults must reach it here —
-    // a per-call `undefined` would fall back to the global fetch instead of
+    // a per-call `undefined` would fall back to the default fetch instead of
     // this scraper's own.
     // async so config failures (bad proxy URL, proxy+fetch conflict) REJECT
     // the promise instead of throwing synchronously out of a Promise-typed
@@ -945,14 +958,17 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
       // the page fetches (going direct would leak the real IP and could see
       // a different robots.txt than the pages).
       const callProxyList = opts?.proxy !== undefined ? [opts.proxy] : opts?.proxies;
-      const probePool =
+      // A per-call probe pool is OWNED by this call — closed in the finally
+      // below, same contract as fetchHtmlImpl's per-call pool.
+      const ownedProbePool =
         callProxyList === undefined
-          ? instancePool
+          ? null
           : new ProxyPool({
               proxies: callProxyList,
               rotation: merged.proxyRotation,
               ...proxyPoolHooks,
             });
+      const probePool = ownedProbePool ?? instancePool;
       let sitemapProbeFetch = merged.fetch ?? fetchImpl;
       if (probePool !== null) {
         if (merged.fetch !== undefined) {
@@ -964,29 +980,33 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
           // Unparseable seed URL — mapImpl raises the ConfigError itself.
         }
       }
-      return mapImpl(fetchHtmlImpl, url, {
-        ...opts,
-        robots: merged.robots,
-        timeout: merged.timeout,
-        signal: merged.signal,
-        // Page fetches must see the RAW `fetch` (undefined unless the caller
-        // injected one): handing them our resolved fallback would trip the
-        // proxy/fetch conflict check inside fetchHtmlImpl. The probe is the
-        // only consumer that needs the resolved default, so it gets its own
-        // field instead.
-        fetch: merged.fetch,
-        sitemapProbeFetch,
-        // `userAgent` deliberately stays whatever the caller passed (via the
-        // spread above): injecting the resolved default would suppress
-        // fetchHtmlImpl's stealth-profile UA fallback while the profile's
-        // sec-ch-ua/sec-fetch-* headers still go out — a mismatched story.
-        // map's own robots.txt probe bypasses fetchHtmlImpl, so it gets the
-        // fully resolved (stealth-aware) UA through a separate field.
-        sitemapProbeUserAgent: wireUserAgent(
-          opts?.userAgent ?? options.userAgent,
-          resolveStealth(merged.stealth),
-        ),
-      });
+      try {
+        return await mapImpl(fetchHtmlImpl, url, {
+          ...opts,
+          robots: merged.robots,
+          timeout: merged.timeout,
+          signal: merged.signal,
+          // Page fetches must see the RAW `fetch` (undefined unless the caller
+          // injected one): handing them our resolved fallback would trip the
+          // proxy/fetch conflict check inside fetchHtmlImpl. The probe is the
+          // only consumer that needs the resolved default, so it gets its own
+          // field instead.
+          fetch: merged.fetch,
+          sitemapProbeFetch,
+          // `userAgent` deliberately stays whatever the caller passed (via the
+          // spread above): injecting the resolved default would suppress
+          // fetchHtmlImpl's stealth-profile UA fallback while the profile's
+          // sec-ch-ua/sec-fetch-* headers still go out — a mismatched story.
+          // map's own robots.txt probe bypasses fetchHtmlImpl, so it gets the
+          // fully resolved (stealth-aware) UA through a separate field.
+          sitemapProbeUserAgent: wireUserAgent(
+            opts?.userAgent ?? options.userAgent,
+            resolveStealth(merged.stealth),
+          ),
+        });
+      } finally {
+        await ownedProbePool?.close();
+      }
     },
     crawl: (seedUrl, opts) => crawlImpl(fetchHtmlImpl, seedUrl, opts),
   };

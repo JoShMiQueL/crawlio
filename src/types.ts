@@ -38,7 +38,7 @@ export type FieldSpec =
 export type FieldSpecRecord = Record<string, FieldSpec>;
 
 /**
- * Infer the runtime type produced for a given field spec. This is the core product.
+ * Infer the runtime type produced for a given field spec.
  *
  * Precedence: `transform` first, then `all`, then the plain "text of the first
  * match" case.
@@ -127,8 +127,8 @@ export type ExtractOptions = {
  *
  * - a `number` — a fixed gap in milliseconds;
  * - `{ min, max }` — a gap sampled uniformly at random in `[min, max]`
- *   milliseconds, re-drawn for every request. Useful with `stealth` so request
- *   cadence is not a metronome.
+ *   milliseconds, re-drawn for every request so request cadence is not a
+ *   fixed, detectable rhythm.
  *
  * Validation is strict: `min >= 0`, `max >= min`, both finite — anything else
  * throws {@link ConfigError}.
@@ -380,7 +380,7 @@ export interface FetchHtmlOptions {
   fetch?: typeof globalThis.fetch;
   /**
    * Route this request through one pinned proxy:
-   * `http://[user:pass@]host:port`. The per-call escape hatch — wins over
+   * `http://[user:pass@]host:port`. Wins over
    * {@link FetchHtmlOptions.proxies} and any instance-level proxy config.
    *
    * Credentials travel inside the URL (typically composed from environment

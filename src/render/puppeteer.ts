@@ -45,8 +45,8 @@ export interface PuppeteerRendererOptions {
   /**
    * Fixed settle time in milliseconds, applied after
    * {@link PuppeteerRendererOptions.waitForSelector} (or after the `goto`
-   * when no selector is set) and before the content is read. The cruder
-   * escape hatch — prefer `waitForSelector` when you know what to wait for.
+   * when no selector is set) and before the content is read. A coarser
+   * fallback — prefer `waitForSelector` when you know what to wait for.
    * A per-call {@link RenderCallOptions.waitForTimeout} wins over this.
    */
   waitForTimeout?: number;
@@ -99,8 +99,8 @@ const CHANNELS: ReadonlySet<string> = new Set([
 
 /**
  * A {@link Renderer} backed by Puppeteer — an optional engine for the
- * `render` seam. `puppeteer-core` is a peer dependency (`pnpm add
- * puppeteer-core`), imported lazily on the first render: the adapter module
+ * `render` seam. `puppeteer-core` is a peer dependency (install it with
+ * your package manager), imported lazily on the first render: the adapter module
  * itself loads and constructs fine without it.
  *
  * Lifecycle: the browser launches lazily on the first `render` call and is
@@ -151,7 +151,7 @@ export function puppeteerRenderer(options: PuppeteerRendererOptions = {}): Puppe
       // A failed module load is almost always the missing peer dep — name
       // the install, whatever the underlying import error was.
       throw new ConfigError(
-        "`puppeteerRenderer` needs `puppeteer-core` (>=24.21) — install it with `pnpm add puppeteer-core`",
+        "`puppeteerRenderer` needs `puppeteer-core` (>=24.21) — install it (e.g. `npm install puppeteer-core`)",
         { cause },
       );
     }

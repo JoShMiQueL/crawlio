@@ -48,8 +48,8 @@ export interface PlaywrightRendererOptions {
   /**
    * Fixed settle time in milliseconds, applied after
    * {@link PlaywrightRendererOptions.waitForSelector} (or after the `goto`
-   * when no selector is set) and before the content is read. The cruder
-   * escape hatch — prefer `waitForSelector` when you know what to wait for.
+   * when no selector is set) and before the content is read. A coarser
+   * fallback — prefer `waitForSelector` when you know what to wait for.
    * A per-call {@link RenderCallOptions.waitForTimeout} wins over this.
    */
   waitForTimeout?: number;
@@ -90,8 +90,8 @@ const WAIT_UNTIL_STATES: ReadonlySet<string> = new Set(["load", "domcontentloade
 
 /**
  * A {@link Renderer} backed by Playwright — the optional engine for the
- * `render` seam. `playwright-core` is a peer dependency (`pnpm add
- * playwright-core`), imported lazily on the first render: the adapter module
+ * `render` seam. `playwright-core` is a peer dependency (install it with
+ * your package manager), imported lazily on the first render: the adapter module
  * itself loads and constructs fine without it.
  *
  * Lifecycle: the browser launches lazily on the first `render` call and is
@@ -140,7 +140,7 @@ export function playwrightRenderer(options: PlaywrightRendererOptions = {}): Pla
       // A failed module load is almost always the missing peer dep — name
       // the install, whatever the underlying import error was.
       throw new ConfigError(
-        "`playwrightRenderer` needs `playwright-core` — install it with `pnpm add playwright-core`",
+        "`playwrightRenderer` needs `playwright-core` — install it (e.g. `npm install playwright-core`)",
         { cause },
       );
     }

@@ -10,10 +10,10 @@
       "Exec(cat)",
       "Exec(grep)",
       "Exec(find)",
-      "Exec(pnpm typecheck)",
-      "Exec(pnpm check)",
-      "Exec(pnpm test)",
-      "Exec(pnpm build)"
+      "Exec(bun run typecheck)",
+      "Exec(bun run check)",
+      "Exec(bun test)",
+      "Exec(bun run build)"
     ],
     "deny": [
       "Exec(rm)",

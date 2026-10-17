@@ -1,6 +1,6 @@
 import { decodeBody } from "./charset.js";
 import { ConfigError, FetchError, HttpError, scrubUrl, TimeoutError } from "./errors.js";
-import { PROXY_FETCH_CONFLICT, ProxyPool } from "./proxy.js";
+import { defaultFetch, PROXY_FETCH_CONFLICT, ProxyPool } from "./proxy.js";
 import { fuseSignal } from "./signal.js";
 import { headerKey, resolveStealth, stealthRequestHeaders } from "./stealth.js";
 import type { FetchHtmlOptions, FetchHtmlResult } from "./types.js";
@@ -55,14 +55,15 @@ function overlayHeaders(
  *
  * @param url The URL to request (already normalized to a string).
  * @param options Per-request options.
- * @param fetchImpl Fetch implementation; defaults to the global `fetch`. This
- *   is the same injection slot as `options.fetch` — a non-default impl
- *   combined with `proxy`/`proxies` is the same {@link ConfigError} conflict.
+ * @param fetchImpl Fetch implementation; defaults to {@link defaultFetch}
+ *   (the env-proxy-normalized `fetch`). This is the same injection slot as
+ *   `options.fetch` — a non-default impl combined with `proxy`/`proxies`
+ *   is the same {@link ConfigError} conflict.
  */
 export async function fetchHtmlOnce(
   url: string,
   options: FetchHtmlOptions = {},
-  fetchImpl: typeof globalThis.fetch = globalThis.fetch,
+  fetchImpl: typeof globalThis.fetch = defaultFetch,
 ): Promise<FetchHtmlResult> {
   // `body` needs a body-capable method: GET/HEAD cannot carry one, and
   // undici would throw a raw TypeError from the Request constructor —
@@ -80,14 +81,20 @@ export async function fetchHtmlOnce(
   let impl = options.fetch ?? fetchImpl;
   // Per-call proxy routing for direct callers: a one-shot, stateless pool —
   // sticky per-origin state lives with createScraper, not here.
+  let perCallPool: ProxyPool | undefined;
   if (options.proxy !== undefined || options.proxies !== undefined) {
     // A non-default positional `fetchImpl` is the same injection as
     // `options.fetch` — a custom impl cannot be routed through a proxy
     // dispatcher, so it is the same conflict rather than being silently
-    // ignored. (The scraper never reaches this branch: it resolves proxies
-    // itself and passes the already-bound fetch positionally without proxy
-    // options.)
-    if (options.fetch !== undefined || fetchImpl !== globalThis.fetch) {
+    // ignored. `defaultFetch` and a bare `globalThis.fetch` both count as
+    // "no custom impl" (the latter is what a caller passing `fetch` through
+    // explicitly looks like). (The scraper never reaches this branch: it
+    // resolves proxies itself and passes the already-bound fetch
+    // positionally without proxy options.)
+    if (
+      options.fetch !== undefined ||
+      (fetchImpl !== defaultFetch && fetchImpl !== globalThis.fetch)
+    ) {
       throw new ConfigError(PROXY_FETCH_CONFLICT, { url });
     }
     let origin: string;
@@ -96,10 +103,11 @@ export async function fetchHtmlOnce(
     } catch (cause) {
       throw new ConfigError(`Invalid URL ${scrubUrl(url)}`, { cause });
     }
-    impl = new ProxyPool({
+    perCallPool = new ProxyPool({
       proxies: options.proxy !== undefined ? [options.proxy] : (options.proxies ?? []),
       rotation: options.proxyRotation,
-    }).fetchFor(origin);
+    });
+    impl = perCallPool.fetchFor(origin);
   }
   const stealth = resolveStealth(options.stealth);
   const profile = stealth === null ? undefined : stealthRequestHeaders(stealth);
@@ -164,5 +172,10 @@ export async function fetchHtmlOnce(
   } finally {
     clearTimeout(timer);
     fused.release();
+    // The stateless per-call pool dies with this request — close its
+    // pooled clients (undici ProxyAgent / Bun.FetchSession) here rather
+    // than leaving their keep-alive sockets to idle-timeout. `close()`
+    // settles best-effort and never rejects.
+    await perCallPool?.close();
   }
 }

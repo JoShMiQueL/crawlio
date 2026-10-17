@@ -1,3 +1,4 @@
+import { defaultFetch } from "../proxy.js";
 import type { SearchCallOptions, SearchProvider, SearchResult } from "../search.js";
 import {
   type HttpSearchProviderOptions,
@@ -42,7 +43,7 @@ const TAVILY_DEFAULT_BASE_URL = "https://api.tavily.com/search";
 export function tavilySearchProvider(options: TavilySearchProviderOptions = {}): SearchProvider {
   const apiKey = resolveApiKey(options.apiKey, "TAVILY_API_KEY", "tavilySearchProvider");
   const endpoint = parseBaseUrl(options.baseUrl ?? TAVILY_DEFAULT_BASE_URL);
-  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const fetchImpl = options.fetch ?? defaultFetch;
   const requestUrl = endpoint.toString();
 
   return {

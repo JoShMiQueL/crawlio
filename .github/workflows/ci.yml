@@ -33,7 +33,7 @@ jobs:
               - 'src/**'
               - 'test/**'
               - 'package.json'
-              - 'pnpm-lock.yaml'
+              - 'bun.lock'
               - 'tsconfig*.json'
               - 'biome.json'
               - '.github/workflows/**'
@@ -53,20 +53,29 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: pnpm/setup@v3
+      # Bun is the toolchain's PM; node is the RUNTIME under test. npm run
+      # below executes the node_modules/.bin shims with their node shebang,
+      # so the checks prove the library works when nothing runs under Bun.
+      - uses: actions/setup-node@v7
         with:
-          runtime: node@${{ matrix.node }}
-          install: false
-          cache: true
+          node-version: ${{ matrix.node }}
 
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm check
-      - run: pnpm build
-      - run: pnpm check:pack
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned for a reproducible lane — same exact-pin policy as the
+          # Node matrix (no floating "latest").
+          bun-version: "1.4.3"
+
+      - run: bun install --frozen-lockfile
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build
+      - run: npm run check:pack
 
   # Bun lane — runtime-class coverage ("does the suite run under the Bun
-  # runtime") plus the compiled binaries: one OS, no pnpm check —
-  # biome/tsc/build/pack stay with the Node lanes.
+  # runtime") plus the compiled binaries: one OS, no full check —
+  # biome/build/pack stay with the Node lanes.
   check-bun:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -75,14 +84,17 @@ jobs:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
-          # Pinned for a reproducible lane — same exact-pin policy as the
-          # Node matrix (no floating "latest").
-          bun-version: "1.4.0"
-      # No --frozen-lockfile: pnpm-lock.yaml is the canonical lockfile and
-      # Bun cannot read it; bun.lock is gitignored, so the flag would pin
-      # nothing while implying otherwise.
-      - run: bun install
+          bun-version: "1.4.3"
+      - run: bun install --frozen-lockfile
       - run: bun test
+      # bun's native typecheck, complementing tsc (authoritative, node
+      # lanes). `bun check` resolves to the package.json "check" script
+      # when one exists (script names shadow the builtin), so the bare
+      # flag form checks the default tsconfig, and the -p form runs from
+      # runner.temp — a directory with no package.json to shadow it.
+      - run: bun --check
+      - run: bun check -p "${{ github.workspace }}/tsconfig.test.json"
+        working-directory: ${{ runner.temp }}
       # `build:bin` compiles the TS sources straight into standalone exes —
       # Bun transpiles, so this lane needs no node/tsc. --help/--version
       # prove the artifacts actually boot (the version is --define-stamped

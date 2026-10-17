@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { defaultFetch } from "./proxy.js";
 import { fuseSignal } from "./signal.js";
 
 const require = createRequire(import.meta.url);
@@ -96,7 +97,7 @@ export async function fetchRobotsTxtResult(
     signal?: AbortSignal;
   } = {},
 ): Promise<RobotsFetchResult> {
-  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const fetchImpl = options.fetch ?? defaultFetch;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeout ?? 10_000);
   const fused = fuseSignal(controller.signal, options.signal);

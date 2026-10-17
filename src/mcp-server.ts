@@ -130,7 +130,7 @@ async function loadMcpPeers(): Promise<McpPeers> {
     return { McpServerCtor: serverModule.McpServer, z: zodModule.z };
   } catch (cause) {
     throw new ConfigError(
-      "`crawlio-mcp` needs the optional peers `@modelcontextprotocol/sdk` and `zod` — install them with `pnpm add @modelcontextprotocol/sdk zod`",
+      "`crawlio-mcp` needs the optional peers `@modelcontextprotocol/sdk` and `zod` — install them (e.g. `npm install @modelcontextprotocol/sdk zod`)",
       { cause },
     );
   }
@@ -218,7 +218,7 @@ export async function createCrawlioMcpHttpHandler(
     ));
   } catch (cause) {
     throw new ConfigError(
-      "`crawlio-mcp --transport http` needs the optional peer `@modelcontextprotocol/sdk` — install it with `pnpm add @modelcontextprotocol/sdk zod`",
+      "`crawlio-mcp --transport http` needs the optional peer `@modelcontextprotocol/sdk` — install it (e.g. `npm install @modelcontextprotocol/sdk zod`)",
       { cause },
     );
   }
@@ -287,7 +287,7 @@ export async function createCrawlioMcpFetchHandler(
     ));
   } catch (cause) {
     throw new ConfigError(
-      "`crawlio-mcp --transport http` needs the optional peer `@modelcontextprotocol/sdk` — install it with `pnpm add @modelcontextprotocol/sdk zod`",
+      "`crawlio-mcp --transport http` needs the optional peer `@modelcontextprotocol/sdk` — install it (e.g. `npm install @modelcontextprotocol/sdk zod`)",
       { cause },
     );
   }

@@ -43,7 +43,9 @@ pnpm add crawlio
 npm i crawlio
 ```
 
-Requires Node.js >= 22.19.
+Requires Node.js >= 22.19. crawlio is dual-runtime — it also runs under
+Bun; `proxy`/`proxies` routing on Bun requires Bun >= 1.4.3
+(`Bun.FetchSession`).
 
 ## Usage
 
@@ -540,6 +542,8 @@ Rules and honest caveats:
 - **Credentials** live only in the proxy URL (`http://user:pass@host:port`),
   typically composed from environment variables as above — never hardcoded,
   never logged; error messages scrub them.
+- **Under Bun, proxies need Bun >= 1.4.3** — routing uses `Bun.FetchSession`
+  (per-proxy pooled sessions); older Bun releases can't drive this feature.
 - **`proxy`/`proxies` can't be combined with an injected `fetch`** — a custom
   fetch can't be routed through a proxy dispatcher, so the combination throws
   `ConfigError`. For transports the SDK can't drive (impersonating TLS

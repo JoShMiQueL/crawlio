@@ -22,7 +22,7 @@ APIs behind `typeof Bun !== "undefined"` guards (`src/runtime.ts`'s
 | Bun API | Replaces | Where |
 | --- | --- | --- |
 | `Bun.serve()` | `node:http` | MCP streamable-HTTP transport — **done** (`createCrawlioMcpFetchHandler` + `WebStandardStreamableHTTPServerTransport`) |
-| `Bun.fetch` (native `proxy:`) | undici dispatcher | fetch layer — **done** (`proxyRequestInit` seam) |
+| `Bun.fetch` (native `proxy:`) | undici dispatcher | fetch layer — **done** (`proxyRequestInit` seam + per-proxy `Bun.FetchSession` pools) |
 | `Bun.spawn` | `node:child_process` | subprocesses |
 | `Bun.file` / `Bun.write` | `node:fs` | file I/O |
 | `Bun.sleep` | timer-based sleeps | retry/backoff — **done** (scraper `sleep` helper) |
@@ -30,7 +30,7 @@ APIs behind `typeof Bun !== "undefined"` guards (`src/runtime.ts`'s
 - ~~CI gains a Bun lane alongside the Node lanes.~~ **Done** — `check-bun`
   job (ubuntu, `bun test`) gates `ci-success`.
 - ~~Bonus: `bun build --compile crawlio-mcp` → standalone single-file binary
-  shipped as a release artifact.~~ **Done** — `pnpm build:bin`
+  shipped as a release artifact.~~ **Done** — `bun run build:bin`
   (`scripts/build-bin.ts`) compiles `crawlio` + `crawlio-mcp` into
   `dist-bin/` (engine peers stay external; the version is
   `--define`-stamped from package.json); the `check-bun` lane builds both

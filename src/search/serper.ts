@@ -1,3 +1,4 @@
+import { defaultFetch } from "../proxy.js";
 import type { SearchCallOptions, SearchProvider, SearchResult } from "../search.js";
 import {
   type HttpSearchProviderOptions,
@@ -41,7 +42,7 @@ const SERPER_DEFAULT_BASE_URL = "https://google.serper.dev/search";
 export function serperSearchProvider(options: SerperSearchProviderOptions = {}): SearchProvider {
   const apiKey = resolveApiKey(options.apiKey, "SERPER_API_KEY", "serperSearchProvider");
   const endpoint = parseBaseUrl(options.baseUrl ?? SERPER_DEFAULT_BASE_URL);
-  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const fetchImpl = options.fetch ?? defaultFetch;
   const requestUrl = endpoint.toString();
 
   return {
