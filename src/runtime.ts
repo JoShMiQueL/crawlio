@@ -33,6 +33,28 @@ declare global {
   namespace Bun {
     /** `setTimeout`-free sleep — the dual-runtime swap for `await`ed delays. */
     function sleep(ms: number): Promise<void>;
+
+    /** What `Bun.serve` returns — the running HTTP server handle. */
+    interface Server {
+      /** The bound port — an ephemeral `port: 0` input resolves to the real one. */
+      port: number;
+      /**
+       * Stop accepting connections; `closeActiveConnections` also drops
+       * sockets already open (long-lived SSE streams would otherwise keep
+       * the server — and the process — alive).
+       */
+      stop(closeActiveConnections?: boolean): Promise<void>;
+    }
+
+    /** The `Bun.serve` options crawlio consumes — a fetch-style handler. */
+    interface ServeOptions {
+      port?: number;
+      hostname?: string;
+      fetch(req: Request): Response | Promise<Response>;
+    }
+
+    /** The fetch-style HTTP server — the dual-runtime swap for `node:http`. */
+    function serve(options: ServeOptions): Server;
   }
 }
 

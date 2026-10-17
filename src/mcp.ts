@@ -21,10 +21,12 @@ import { createServer } from "node:http";
 import { parseMcpBinArgs } from "./cli-args.js";
 import {
   type CrawlioTools,
+  createCrawlioMcpFetchHandler,
   createCrawlioMcpHttpHandler,
   createCrawlioMcpServer,
   createCrawlioTools,
 } from "./mcp-server.js";
+import { isBun } from "./runtime.js";
 import { VERSION } from "./version.js";
 
 const USAGE = `crawlio-mcp ${VERSION} — MCP server exposing crawlio's scrape/map/crawl/search tools
@@ -101,6 +103,17 @@ async function serveStdio(): Promise<void> {
 /** http mode — a stateless Streamable HTTP endpoint on host:port. */
 async function serveHttp(host: string, port: number): Promise<void> {
   const tools = createCrawlioTools();
+  if (isBun) {
+    // Bun.serve wins here — the native fetch-style server, no node:http
+    // shim. Same loopback default, same stateless per-request semantics;
+    // `stop(true)` is the closeAllConnections equivalent for SSE streams.
+    const fetch = await createCrawlioMcpFetchHandler(tools, logError);
+    const server = Bun.serve({ port, hostname: host, fetch });
+    // stderr even here — diagnostics never share a channel with traffic.
+    process.stderr.write(`crawlio-mcp: listening on http://${host}:${port}/mcp\n`);
+    wireShutdown(tools, () => server.stop(true));
+    return;
+  }
   const handleRequest = await createCrawlioMcpHttpHandler(tools, logError);
   const httpServer = createServer((req, res) => {
     void handleRequest(req, res);

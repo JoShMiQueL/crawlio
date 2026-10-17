@@ -60,6 +60,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "build:bin": "bun scripts/build-bin.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test:types": "tsc --noEmit -p tsconfig.test.json",
     "lint": "biome check .",

@@ -40,10 +40,12 @@ describe("test source hygiene", () => {
     // not library surface), src/mcp-*.js are the `crawlio-mcp` binary's
     // layers (likewise a bin entry, not library surface), src/proxy.js
     // holds the internal proxyRequestInit seam — the runtime-branched
-    // RequestInit extension that is deliberately not public API — and
-    // src/render/*.js are the `crawlio/playwright` and `crawlio/puppeteer`
-    // subpath exports — they cannot come through index.js because their
-    // peer deps must stay optional.
+    // RequestInit extension that is deliberately not public API —
+    // src/runtime.js holds the `isBun` dual-runtime seam (likewise
+    // deliberately not public API), and src/render/*.js are the
+    // `crawlio/playwright` and `crawlio/puppeteer` subpath exports — they
+    // cannot come through index.js because their peer deps must stay
+    // optional.
     const allowed = new Set([
       "../src/cli-args.js",
       "../src/errors.js",
@@ -52,6 +54,7 @@ describe("test source hygiene", () => {
       "../src/proxy.js",
       "../src/render/playwright.js",
       "../src/render/puppeteer.js",
+      "../src/runtime.js",
     ]);
     const offenders = testSources.flatMap(({ name, text }) =>
       [...text.matchAll(/from "(\.\.\/src\/[^"]+)"/g)]

@@ -64,9 +64,9 @@ jobs:
       - run: pnpm build
       - run: pnpm check:pack
 
-  # Bun lane — runtime-class coverage only ("does the suite run under the
-  # Bun runtime"): one OS, no pnpm check — biome/tsc/build/pack stay with
-  # the Node lanes.
+  # Bun lane — runtime-class coverage ("does the suite run under the Bun
+  # runtime") plus the compiled binaries: one OS, no pnpm check —
+  # biome/tsc/build/pack stay with the Node lanes.
   check-bun:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -83,6 +83,13 @@ jobs:
       # nothing while implying otherwise.
       - run: bun install
       - run: bun test
+      # `build:bin` compiles the TS sources straight into standalone exes —
+      # Bun transpiles, so this lane needs no node/tsc. --help/--version
+      # prove the artifacts actually boot (the version is --define-stamped
+      # from package.json — no on-disk package.json inside a binary).
+      - run: bun run build:bin
+      - run: ./dist-bin/crawlio-mcp --help
+      - run: ./dist-bin/crawlio --version
 
   ci-success:
     needs: [changes, check, check-bun]
