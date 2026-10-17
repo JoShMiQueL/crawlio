@@ -18,6 +18,7 @@ import { PROXY_FETCH_CONFLICT, ProxyPool, type ProxyPoolOptions } from "./proxy.
 import { isLikelyDynamic, type RenderedPage } from "./render.js";
 import { withRetries } from "./retry.js";
 import { fetchRobotsTxtResult, type RobotsAgent, robotsAllowed, robotsUrlFor } from "./robots.js";
+import { isBun } from "./runtime.js";
 import {
   CookieJar,
   headerKey,
@@ -60,7 +61,12 @@ interface InternalScraperOptions extends ScraperOptions {
   __proxyPool?: Pick<ProxyPoolOptions, "fetchFactory" | "now" | "banThreshold" | "cooldownMs">;
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+// Bun.sleep is the identical promise without the setTimeout wrapper — only
+// the scraper-level sleeps get the swap (requestDelay pacing, crawl-delay
+// waits, map pacing). p-retry's backoff keeps its own internal setTimeout
+// on both runtimes; it is not affected.
+const sleep = (ms: number): Promise<void> =>
+  isBun ? Bun.sleep(ms) : new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * The User-Agent actually sent on the wire: an explicit userAgent wins

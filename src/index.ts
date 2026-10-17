@@ -24,6 +24,7 @@ export type { RenderCallOptions, RenderedPage, Renderer, RenderMode } from "./re
 export { isLikelyDynamic } from "./render.js";
 export type { RobotsAgent } from "./robots.js";
 export { fetchRobotsTxt, parseRobots, robotsAllowed, robotsUrlFor } from "./robots.js";
+export { isBun } from "./runtime.js";
 export {
   crawl,
   createScraper,

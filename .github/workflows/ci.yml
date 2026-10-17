@@ -64,8 +64,28 @@ jobs:
       - run: pnpm build
       - run: pnpm check:pack
 
+  # Bun lane — runtime-class coverage only ("does the suite run under the
+  # Bun runtime"): one OS, no pnpm check — biome/tsc/build/pack stay with
+  # the Node lanes.
+  check-bun:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned for a reproducible lane — same exact-pin policy as the
+          # Node matrix (no floating "latest").
+          bun-version: "1.4.0"
+      # No --frozen-lockfile: pnpm-lock.yaml is the canonical lockfile and
+      # Bun cannot read it; bun.lock is gitignored, so the flag would pin
+      # nothing while implying otherwise.
+      - run: bun install
+      - run: bun test
+
   ci-success:
-    needs: [changes, check]
+    needs: [changes, check, check-bun]
     if: always()
     runs-on: ubuntu-26.04
     steps:
@@ -73,4 +93,6 @@ jobs:
           if [ "${{ needs.changes.result }}" = "failure" ] || [ "${{ needs.changes.result }}" = "cancelled" ]; then exit 1; fi
           result="${{ needs.check.result }}"
           if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then exit 1; fi
+          bun="${{ needs.check-bun.result }}"
+          if [ "$bun" = "failure" ] || [ "$bun" = "cancelled" ]; then exit 1; fi
           echo "ci: ${result} (skipped is fine — docs-only change)"
