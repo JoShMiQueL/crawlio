@@ -318,7 +318,7 @@ Where that `mcpServers` block lives per client:
 | Cursor | `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project) |
 | VS Code Copilot | `.vscode/mcp.json` or `mcp.servers` in user settings — the top-level key is `"servers"`, not `"mcpServers"` |
 | OpenCode | `opencode.json`/`opencode.jsonc` (project root) or `~/.config/opencode/opencode.json` (global) — different shape: top-level `"mcp"`, `"type": "local"`, `command` as an array, env under `"environment"` (see below) |
-| Devin CLI | `.devin/mcp_config.json` (committed) / `.devin/mcp_config.local.json` (gitignored — put API keys here) per project, or `~/.config/devin/mcp_config.json` (global; `%APPDATA%\devin\mcp_config.json` on Windows) — same `mcpServers` shape; or `devin mcp add crawlio -- crawlio-mcp` (stdio) / `devin mcp add crawlio http://127.0.0.1:3000/mcp` (http — transport inferred) |
+| Devin CLI | `.devin/mcp_config.json` (project) or `~/.config/devin/mcp_config.json` (global; `%APPDATA%\devin\mcp_config.json` on Windows) — same `mcpServers` shape; or `devin mcp add crawlio -- crawlio-mcp` |
 
 OpenCode's block is the odd one out — the same server in `opencode.json`
 (`"enabled": true` optional):
