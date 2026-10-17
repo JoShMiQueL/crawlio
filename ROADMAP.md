@@ -45,7 +45,7 @@ Ordered by effort:
 | Dep | Plan | Effort |
 | --- | --- | --- |
 | ~~`p-limit` / `p-retry`~~ | Done — `src/limit.ts`, `src/retry.ts` | easy |
-| `robots-parser` | Own parser, faithful to Google's spec (allow/disallow, wildcards, longest-match) | medium |
+| ~~`robots-parser`~~ | Done — `src/robots-parser.ts`, RFC 9309/Google-spec parser | medium |
 | `undici` | Node lane only — Bun fetch has native `proxy:` | easy/med |
 | `cheerio` | Extraction seam with two backends — see caveat | hard |
 

@@ -1,23 +1,9 @@
-import { createRequire } from "node:module";
 import { defaultFetch } from "./proxy.js";
+import { parse, type RobotsAgent } from "./robots-parser.js";
 import { fuseSignal } from "./signal.js";
 
-const require = createRequire(import.meta.url);
-type RobotParser = (
-  url: string,
-  robotstxt: string,
-) => {
-  isAllowed(url: string, ua?: string): boolean | undefined;
-  isDisallowed(url: string, ua?: string): boolean | undefined;
-  getMatchingLineNumber(url: string, ua?: string): number;
-  getCrawlDelay(ua?: string): number | undefined;
-  getSitemaps(): string[];
-  getPreferredHost(): string | null;
-};
-const robotsParser = require("robots-parser") as RobotParser;
-
-/** A parsed robots.txt policy for one origin — the object `robots-parser` builds. */
-export type RobotsAgent = ReturnType<RobotParser>;
+/** A parsed robots.txt policy for one origin — built by `src/robots-parser.ts`. */
+export type { RobotsAgent } from "./robots-parser.js";
 
 /**
  * Parse robots.txt `contents` (as fetched from `url`) into a {@link RobotsAgent}.
@@ -28,15 +14,15 @@ export type RobotsAgent = ReturnType<RobotParser>;
  * @returns A queryable policy agent.
  */
 export function parseRobots(url: string, contents: string): RobotsAgent {
-  return robotsParser(url, contents);
+  return parse(url, contents);
 }
 
 /**
  * Whether `userAgent` may fetch `url` under `robots`.
  *
- * A missing policy (`null`/`undefined` — no usable robots.txt) means allow, and
- * an undecidable answer from the parser is also treated as allowed: an
- * ambiguous file must not silently block scraping.
+ * A missing policy (`null`/`undefined` — no usable robots.txt) means allow; the
+ * parser itself answers `true` for undecidable queries (bad or cross-origin
+ * URL), so an ambiguous file never silently blocks scraping.
  */
 export function robotsAllowed(
   robots: RobotsAgent | null | undefined,
@@ -44,8 +30,7 @@ export function robotsAllowed(
   userAgent: string,
 ): boolean {
   if (!robots) return true;
-  const allowed = robots.isAllowed(url, userAgent);
-  return allowed !== false;
+  return robots.isAllowed(url, userAgent);
 }
 
 /**

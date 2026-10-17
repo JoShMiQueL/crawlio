@@ -89,7 +89,6 @@
   },
   "dependencies": {
     "cheerio": "1.2.0",
-    "robots-parser": "3.0.1",
     "undici": "8.12.2"
   },
   "peerDependencies": {
