@@ -13,13 +13,43 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      # Needed for push events (git diff); PRs use the API but harmless
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'src/**'
+              - 'test/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'tsconfig*.json'
+              - 'biome.json'
+              - '.github/workflows/**'
+
   check:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-26.04, windows-2025]
+        os: [ubuntu-26.04]
         node: [22, 24, 26]
+        include:
+          - os: windows-2025
+            node: 24
     steps:
       - uses: actions/checkout@v7
 
@@ -35,7 +65,12 @@ jobs:
       - run: pnpm check:pack
 
   ci-success:
-    needs: check
+    needs: [changes, check]
+    if: always()
     runs-on: ubuntu-26.04
     steps:
-      - run: exit 0
+      - run: |
+          if [ "${{ needs.changes.result }}" = "failure" ] || [ "${{ needs.changes.result }}" = "cancelled" ]; then exit 1; fi
+          result="${{ needs.check.result }}"
+          if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then exit 1; fi
+          echo "ci: ${result} (skipped is fine — docs-only change)"
