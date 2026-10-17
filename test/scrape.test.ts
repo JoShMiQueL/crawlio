@@ -23,6 +23,14 @@ type FetchImpl = typeof globalThis.fetch;
 
 const HTML_HEADERS = { "content-type": "text/html; charset=utf-8" };
 
+/**
+ * Wall-clock slack subtracted from lower-bound timing assertions: `setTimeout`
+ * can fire a millisecond or two early on loaded CI runners, so a hard
+ * `elapsed >= delayMs` bound flakes. The guarantee under test is "spaced
+ * ~delay, not ~0", which a few ms of clock-granularity slack preserves.
+ */
+const TIMER_EPSILON_MS = 5;
+
 /** A fetch mock that always serves `body` with the given status. */
 function staticFetch(body: string, status = 200, headers: Record<string, string> = HTML_HEADERS) {
   const calls: Array<{ input: unknown; init?: RequestInit }> = [];
@@ -488,7 +496,7 @@ describe("robots", () => {
     const scraper = createScraper({ fetch: impl });
     const start = Date.now();
     await scraper.fetchHtml("https://example.com/x", { robots: true });
-    expect(Date.now() - start).toBeGreaterThanOrEqual(900);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(900 - TIMER_EPSILON_MS);
   });
 
   it("treats an unreachable robots.txt as allow-all", async () => {
@@ -585,7 +593,7 @@ describe("per-origin serialisation", () => {
     ]);
     expect(starts).toHaveLength(2);
     const gap = (starts[1] as number) - (starts[0] as number);
-    expect(Math.abs(gap)).toBeGreaterThanOrEqual(40);
+    expect(Math.abs(gap)).toBeGreaterThanOrEqual(40 - TIMER_EPSILON_MS);
   });
 
   it("runs different-origin requests in parallel", async () => {
@@ -630,7 +638,7 @@ describe("per-origin serialisation", () => {
     expect((bStart as number) - (a1Start as number)).toBeLessThan(50);
     // Sanity: the three same-origin fetches serialised — third start is late.
     const a3Start = starts.get("https://a.example/3") as number;
-    expect(a3Start - t0).toBeGreaterThanOrEqual(140);
+    expect(a3Start - t0).toBeGreaterThanOrEqual(140 - TIMER_EPSILON_MS);
   });
 
   it("a rejected task does not stall its origin queue", async () => {
@@ -723,12 +731,12 @@ describe("per-origin serialisation", () => {
       scraper.fetchHtml("https://paced.example/c"),
     ]);
     expect(starts).toHaveLength(3);
-    // The first request is not delayed; each later start is at least
-    // `requestDelay` after the previous one (responses are instant, so start
-    // spacing ≈ the gap between request end and next start).
+    // The first request is not delayed; each later start is ~`requestDelay`
+    // after the previous one (responses are instant, so start spacing ≈ the
+    // gap between request end and next start).
     for (let i = 1; i < starts.length; i += 1) {
       expect((starts[i] as number) - (starts[i - 1] as number)).toBeGreaterThanOrEqual(
-        requestDelay,
+        requestDelay - TIMER_EPSILON_MS,
       );
     }
   });
