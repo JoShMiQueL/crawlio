@@ -1,5 +1,7 @@
 # crawlio
 
+[![ci](https://github.com/JoShMiQueL/crawlio/actions/workflows/ci.yml/badge.svg)](https://github.com/JoShMiQueL/crawlio/actions/workflows/ci.yml)
+
 Simple, typed web scraping for static HTML: fetch a page, parse it, and extract
 typed fields via CSS selectors. Pre-1.0 — the API may still change.
 
