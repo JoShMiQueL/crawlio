@@ -544,6 +544,11 @@ carries its own config. `--renderer` is mutually exclusive with
 `--engine`, the engine flags (`--browser`/`--channel`/`--executable-path`)
 and the settle flags (`--wait-for`/`--wait-ms`) for the same reason.
 
+Writing one? [docs/custom-adapters.md](docs/custom-adapters.md) is the
+deep dive — the full contracts, the semantics the SDK relies on,
+lifecycle and error conventions, packaging for the CLI, and testing
+advice. This section stays the quick reference.
+
 ## License
 
 MIT
