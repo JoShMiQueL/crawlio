@@ -1,5 +1,4 @@
 import pLimit from "p-limit";
-import pRetry from "p-retry";
 import { detectChallenge } from "./captcha.js";
 import { crawlImpl } from "./crawl.js";
 import {
@@ -17,6 +16,7 @@ import { mapImpl } from "./map.js";
 import { parseHtml } from "./parse.js";
 import { PROXY_FETCH_CONFLICT, ProxyPool, type ProxyPoolOptions } from "./proxy.js";
 import { isLikelyDynamic, type RenderedPage } from "./render.js";
+import { withRetries } from "./retry.js";
 import { fetchRobotsTxtResult, type RobotsAgent, robotsAllowed, robotsUrlFor } from "./robots.js";
 import {
   CookieJar,
@@ -105,28 +105,6 @@ function isValidRequestDelay(delay: RequestDelay | undefined): boolean {
     Number.isFinite(delay.max) &&
     delay.max >= delay.min
   );
-}
-
-/**
- * Whether a failure is worth retrying. `p-retry` already short-circuits plain
- * `TypeError`s (non-network bugs), so an explicit `false` there is just clarity.
- * A `FetchError` whose `cause` is an `AbortError` is a deliberate caller abort —
- * retrying it would be wrong (the caller asked us to stop).
- */
-function shouldRetry(error: unknown): boolean {
-  if (
-    error instanceof FetchError &&
-    error.cause instanceof DOMException &&
-    error.cause.name === "AbortError"
-  ) {
-    return false;
-  }
-  if (error instanceof FetchError || error instanceof TimeoutError) return true;
-  if (error instanceof HttpError) {
-    return error.status === 429 || error.status === 408 || error.status >= 500;
-  }
-  if (error instanceof RobotsError) return false;
-  return false;
 }
 
 /**
@@ -764,64 +742,49 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
           return false;
         };
 
-        try {
-          const staticResult = await pRetry(
-            async () => {
-              if (crawlDelayMs > 0) await sleep(crawlDelayMs);
-              return attemptOnce();
-            },
-            {
-              retries: merged.retries ?? DEFAULT_RETRIES,
-              factor: 2,
-              minTimeout: 500,
-              maxTimeout: 8_000,
-              randomize: true,
-              signal: merged.signal,
-              shouldRetry: (context) => shouldRetry(context.error),
-            },
-          );
-          if (renderer !== undefined && renderMode === "auto" && wantsRender(staticResult)) {
-            try {
-              // The escalation fires a SECOND same-origin request that
-              // schedule() cannot pace — the static fetch already consumed
-              // this task's `requestDelay` slot. Pace the render off it here
-              // ("always" needs nothing: schedule() paced the render
-              // directly). `requestDelay` only exists while the origin queue
-              // does, so `serializePerOrigin: false` skips this too.
-              const paceMs =
-                merged.serializePerOrigin === false ? 0 : sampleRequestDelay(merged.requestDelay);
-              if (paceMs > 0 && merged.signal?.aborted !== true) await sleep(paceMs);
-              // A caller abort that landed during the pause is the call's
-              // error, not a render failure to fall back from.
-              if (merged.signal?.aborted) {
-                throw new FetchError("Request aborted by caller", {
-                  url: target.toString(),
-                  cause: merged.signal.reason,
-                });
-              }
-              return await renderOnce();
-            } catch (renderError) {
-              // `auto` degrades gracefully: a failed render never makes the
-              // page worse than the static answer. A caller abort is not a
-              // render failure, though — it is honoured, not swallowed.
-              if (merged.signal?.aborted) throw renderError;
-              return staticResult;
+        // `withRetries` is the shared retry policy (src/retry.ts): backoff,
+        // retryability, and the mid-backoff AbortError→FetchError wrap all
+        // live there, so every request path retries identically.
+        const staticResult = await withRetries(
+          async () => {
+            if (crawlDelayMs > 0) await sleep(crawlDelayMs);
+            return attemptOnce();
+          },
+          {
+            retries: merged.retries ?? DEFAULT_RETRIES,
+            signal: merged.signal,
+            url: target.toString(),
+          },
+        );
+        if (renderer !== undefined && renderMode === "auto" && wantsRender(staticResult)) {
+          try {
+            // The escalation fires a SECOND same-origin request that
+            // schedule() cannot pace — the static fetch already consumed
+            // this task's `requestDelay` slot. Pace the render off it here
+            // ("always" needs nothing: schedule() paced the render
+            // directly). `requestDelay` only exists while the origin queue
+            // does, so `serializePerOrigin: false` skips this too.
+            const paceMs =
+              merged.serializePerOrigin === false ? 0 : sampleRequestDelay(merged.requestDelay);
+            if (paceMs > 0 && merged.signal?.aborted !== true) await sleep(paceMs);
+            // A caller abort that landed during the pause is the call's
+            // error, not a render failure to fall back from.
+            if (merged.signal?.aborted) {
+              throw new FetchError("Request aborted by caller", {
+                url: target.toString(),
+                cause: merged.signal.reason,
+              });
             }
+            return await renderOnce();
+          } catch (renderError) {
+            // `auto` degrades gracefully: a failed render never makes the
+            // page worse than the static answer. A caller abort is not a
+            // render failure, though — it is honoured, not swallowed.
+            if (merged.signal?.aborted) throw renderError;
+            return staticResult;
           }
-          return staticResult;
-        } catch (cause) {
-          // p-retry rejects with `signal.reason` — a raw DOMException — when the
-          // caller's signal aborts mid-backoff (between attempts). That bypasses
-          // fetchHtmlOnce's AbortError→FetchError wrap, so wrap it here too:
-          // the taxonomy promises every SDK-thrown error is a ScrapeError.
-          if (cause instanceof DOMException && cause.name === "AbortError") {
-            throw new FetchError("Request aborted by caller", {
-              url: target.toString(),
-              cause,
-            });
-          }
-          throw cause;
         }
+        return staticResult;
       });
     });
   }

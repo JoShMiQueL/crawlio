@@ -19,8 +19,8 @@ in your own process, not a hosted service.
 | `crawl` — recursive same-site traversal | done |
 | Proxies — pool routing with rotation and ban-aware health checks | done |
 | `render` seam + `isLikelyDynamic` — headless engine injection for JS pages | done |
-| CLI — `crawlio scrape`/`map`/`crawl`/`install` | done |
-| `search` — via external search providers | planned |
+| CLI — `crawlio scrape`/`map`/`crawl`/`search`/`install` | done |
+| `search` — via external search providers | done |
 | MCP server — expose the toolkit to agents | planned |
 
 Non-goals:
@@ -90,6 +90,44 @@ Only links on the seed's origin are followed. A failing page is recorded with
 returns what was collected. Every fetch goes through the normal pipeline —
 robots.txt, per-origin serialization, delays, retries, and stealth all apply.
 
+### `search` — web search via providers
+
+```ts
+import { braveSearchProvider, scrapeMany, search } from "crawlio";
+
+const results = await search("typed web scraping sdk", {
+  provider: braveSearchProvider(), // reads BRAVE_API_KEY
+  limit: 10,
+});
+// results: { url, title?, description? }[]
+
+// Pipe the hits straight into extraction:
+const pages = await scrapeMany(
+  results.map((r) => r.url),
+  { title: "h1" },
+);
+```
+
+`search` is a provider SEAM, not a search engine — crawlio ships no index (a
+declared non-goal). Any object implementing the `SearchProvider` interface
+slots in:
+
+```ts
+interface SearchProvider {
+  search(query: string, options?: { limit?: number; timeout?: number; signal?: AbortSignal }):
+    Promise<{ url: string; title?: string; description?: string }[]>;
+}
+```
+
+`braveSearchProvider({ apiKey?, baseUrl?, fetch? })` is the reference
+implementation over the Brave Search API: the key comes from `apiKey` or the
+`BRAVE_API_KEY` environment variable and travels in the
+`X-Subscription-Token` header only — never in the URL, never in error
+messages. Requests run through the same retry/backoff policy as page fetches,
+with the honest `crawlio/<version>` User-Agent. `query` is trimmed and must be
+non-empty; `limit` is forwarded to the provider (`count`) AND enforced
+client-side on the returned list.
+
 Prefer the terminal? The same toolkit ships as a `crawlio` binary —
 `crawlio --help` lists the commands (see [CLI](#cli)).
 
@@ -138,6 +176,7 @@ the library API.
 crawlio scrape <url> [--fields 'title=h1;links=a.href@all'] [--render auto|always] [--json]
 crawlio map <url> [--limit N]
 crawlio crawl <url> [--max-depth N] [--max-pages N]
+crawlio search <query> [--limit N] [--json]
 crawlio install [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--dry-run]
 crawlio --help | --version
 ```
@@ -171,6 +210,9 @@ crawlio --help | --version
   `--wait-ms` all require `--render` and error out without it.
 - **`map`/`crawl`** print their JSON result (`--limit`, `--max-depth`,
   `--max-pages` map to the library options).
+- **`search`** queries the Brave Search API and prints the hits
+  (`--limit` caps them) — the key comes from the `BRAVE_API_KEY`
+  environment variable.
 - **`install`** detects the package manager (`packageManager` manifest
   field → lockfile sniff → npm fallback; npm, pnpm, bun and yarn are
   recognized) and dev-installs `playwright-core` or `puppeteer-core`

@@ -36,6 +36,14 @@ export {
   scrapeManySafe,
 } from "./scraper.js";
 export type {
+  BraveSearchProviderOptions,
+  SearchCallOptions,
+  SearchOptions,
+  SearchProvider,
+  SearchResult,
+} from "./search.js";
+export { braveSearchProvider, search } from "./search.js";
+export type {
   CaptchaChallenge,
   CaptchaSolution,
   CaptchaSolver,

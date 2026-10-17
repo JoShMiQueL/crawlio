@@ -63,5 +63,7 @@ This project uses a Devin multi-agent system in `.devin/`:
 
 ## Roadmap
 
-v1 ships a static-HTML core behind a `render` seam; a headless engine plugs in
-later via optional injection (peer-dep/dynamic import) — never bundled.
+v1 ships a static-HTML core behind `render`/`SearchProvider` seams — `search`
+is done, delegating to external providers (`braveSearchProvider` is the
+reference). A headless engine plugs in later via optional injection
+(peer-dep/dynamic import) — never bundled.

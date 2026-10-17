@@ -7,6 +7,7 @@
  *   crawlio scrape <url> [--fields 'title=h1;links=a.href@all'] [--render auto|always] [--json]
  *   crawlio map <url> [--limit N]
  *   crawlio crawl <url> [--max-depth N] [--max-pages N]
+ *   crawlio search <query> [--limit N] [--json]
  *   crawlio install [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--dry-run]
  */
 import { spawn } from "node:child_process";
@@ -19,7 +20,16 @@ import {
   parseFieldsSpec,
 } from "./cli-args.js";
 import type { Renderer, RenderMode } from "./index.js";
-import { ConfigError, crawl, createScraper, map, ScrapeError, VERSION } from "./index.js";
+import {
+  braveSearchProvider,
+  ConfigError,
+  crawl,
+  createScraper,
+  map,
+  ScrapeError,
+  search,
+  VERSION,
+} from "./index.js";
 
 const USAGE = `crawlio ${VERSION} — typed web scraping for static HTML (+ JS via a render engine)
 
@@ -27,6 +37,7 @@ Usage:
   crawlio scrape <url> [options]   Fetch a page and extract fields
   crawlio map <url> [options]      Discover the URLs of a site
   crawlio crawl <url> [options]    Crawl same-origin pages breadth-first
+  crawlio search <query> [options] Search the web via a provider
   crawlio install [options]        Install a render engine (peer dep + browser)
   crawlio --help                   This help
   crawlio --version                Print the version
@@ -67,6 +78,11 @@ map options:
 crawl options:
   --max-depth N          Link distance from the seed (default 2).
   --max-pages N          Hard cap on pages fetched (default 50).
+
+search options:
+  --limit N              Maximum results returned.
+  Uses the Brave Search API — the key comes from the BRAVE_API_KEY
+  environment variable.
 
 install options:
   --engine playwright|puppeteer   Engine to install (default playwright).
@@ -301,6 +317,17 @@ async function main(argv: string[]): Promise<number> {
       });
       // Error instances need a replacer to serialize meaningfully.
       process.stdout.write(`${JSON.stringify(result, errorReplacer, values.json ? 0 : 2)}\n`);
+      return 0;
+    }
+    case "search": {
+      if (url === undefined) throw new ConfigError("`search` needs a query");
+      // The CLI wires the reference provider; its env-key resolution is
+      // what makes `crawlio search` a zero-config command.
+      const results = await search(url, {
+        provider: braveSearchProvider(),
+        limit: parseCount(values.limit, "--limit"),
+      });
+      printJson(results, values.json);
       return 0;
     }
     case "install": {
