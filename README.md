@@ -15,8 +15,8 @@ in your own process, not a hosted service.
 | Politeness controls — robots.txt, per-origin serialization, delays, concurrency cap | done |
 | Stealth (opt-in) — browser header profiles, cookie jar, referer chain, jitter | done |
 | CAPTCHA solver seam — user-provided `solve` interface | done |
-| `map` — discover all URLs on a site | planned |
-| `crawl` — recursive same-site traversal | planned |
+| `map` — discover all URLs on a site | done |
+| `crawl` — recursive same-site traversal | done |
 | Proxies — pluggable per-request routing | planned |
 | `render` seam + `isLikelyDynamic` — headless engine injection for JS pages | planned |
 | `search` — via external search providers | planned |
@@ -54,6 +54,40 @@ const page = await scrape("https://example.com", {
 });
 // page.title: string | undefined — inferred from the field spec
 ```
+
+### `map` — discover a site's URLs
+
+```ts
+import { map } from "crawlio";
+
+const { urls, source } = await map("https://example.com", { limit: 500 });
+// urls: { url, lastModified? }[] — source: "sitemap" | "links"
+```
+
+`Sitemap:` directives in robots.txt and `/sitemap.xml` are tried first
+(sitemap indexes recurse into their children, bounded at 50 documents); when
+no sitemap yields URLs, the seed page's same-origin links are used instead.
+`source` tells you which strategy answered.
+
+### `crawl` — same-origin traversal
+
+```ts
+import { crawl } from "crawlio";
+
+const result = await crawl("https://example.com/docs", {
+  maxDepth: 3,                        // default 2
+  maxPages: 50,                       // default 50 — a hard politeness cap
+  include: [/^https:\/\/example\.com\/docs\//],
+  exclude: [/\.(jpg|pdf)$/],
+  fields: { title: "h1" },            // optional per-page extraction
+});
+// result.pages: { url, depth, data?, error? }[] in BFS order
+```
+
+Only links on the seed's origin are followed. A failing page is recorded with
+`error` set and never aborts the crawl; an `AbortSignal` stops dequeuing and
+returns what was collected. Every fetch goes through the normal pipeline —
+robots.txt, per-origin serialization, delays, retries, and stealth all apply.
 
 ## Features
 

@@ -1,6 +1,7 @@
 import pLimit from "p-limit";
 import pRetry from "p-retry";
 import { detectChallenge } from "./captcha.js";
+import { crawlImpl } from "./crawl.js";
 import {
   ConfigError,
   FetchError,
@@ -12,22 +13,28 @@ import {
 } from "./errors.js";
 import { extract, extractAll } from "./extract.js";
 import { DEFAULT_RETRIES, DEFAULT_TIMEOUT, DEFAULT_USER_AGENT, fetchHtmlOnce } from "./fetch.js";
+import { mapImpl } from "./map.js";
 import { parseHtml } from "./parse.js";
 import { fetchRobotsTxtResult, type RobotsAgent, robotsAllowed, robotsUrlFor } from "./robots.js";
 import {
   CookieJar,
   headerKey,
+  type ResolvedStealth,
   resolveStealth,
   setCookieHeaders,
   stealthRequestHeaders,
 } from "./stealth.js";
 import type {
   CaptchaSolution,
+  CrawlOptions,
+  CrawlResult,
   ExtractOptions,
   ExtractResult,
   FetchHtmlOptions,
   FetchHtmlResult,
   FieldSpecRecord,
+  MapOptions,
+  MapResult,
   RequestDelay,
   ScrapeBatchItem,
   ScrapeOptions,
@@ -40,6 +47,23 @@ const DEFAULT_CONCURRENCY = 4;
 const MAX_CRAWL_DELAY_MS = 30_000;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The User-Agent actually sent on the wire: an explicit userAgent wins
+ * (per-call over instance); under stealth the profile's UA is the fallback so
+ * robots matching and any direct probe see the same UA the request sends.
+ */
+function wireUserAgent(
+  explicitUserAgent: string | undefined,
+  stealth: ResolvedStealth | null,
+): string {
+  return (
+    explicitUserAgent ??
+    (stealth === null
+      ? DEFAULT_USER_AGENT
+      : (stealthRequestHeaders(stealth)["user-agent"] ?? DEFAULT_USER_AGENT))
+  );
+}
 
 /**
  * Sample this request's pacing gap: a fixed `number` returns as-is; a
@@ -259,15 +283,8 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     }
     const origin = target.origin;
     const stealth = resolveStealth(merged.stealth);
-    // The UA actually sent on the wire: an explicit userAgent wins (per-call
-    // over instance); under stealth the profile's UA is the fallback so robots
-    // matching sees the same UA the request sends.
     const explicitUserAgent = call?.userAgent ?? options.userAgent;
-    const userAgent =
-      explicitUserAgent ??
-      (stealth === null
-        ? DEFAULT_USER_AGENT
-        : (stealthRequestHeaders(stealth)["user-agent"] ?? DEFAULT_USER_AGENT));
+    const userAgent = wireUserAgent(explicitUserAgent, stealth);
     const effectiveFetch = merged.fetch ?? fetchImpl;
     // p-retry short-circuits a pre-aborted signal with a raw AbortError; wrap it
     // here so every error leaving the SDK is a ScrapeError (see errors.ts).
@@ -660,6 +677,31 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     scrapeAll: (url, container, fields, opts) => scrapeAllImpl(url, container, fields, opts),
     scrapeMany: (urls, fields, opts) => scrapeManyImpl(urls, fields, opts),
     scrapeManySafe: (urls, fields, opts) => scrapeManySafeImpl(urls, fields, opts),
+    // map fetches robots.txt itself (for Sitemap: directives) OUTSIDE
+    // fetchHtmlImpl, so the resolved instance defaults must reach it here —
+    // a per-call `undefined` would fall back to the global fetch instead of
+    // this scraper's own.
+    map: (url, opts) => {
+      const merged = mergedOptions(opts);
+      return mapImpl(fetchHtmlImpl, url, {
+        ...opts,
+        robots: merged.robots,
+        timeout: merged.timeout,
+        signal: merged.signal,
+        fetch: merged.fetch ?? fetchImpl,
+        // `userAgent` deliberately stays whatever the caller passed (via the
+        // spread above): injecting the resolved default would suppress
+        // fetchHtmlImpl's stealth-profile UA fallback while the profile's
+        // sec-ch-ua/sec-fetch-* headers still go out — a mismatched story.
+        // map's own robots.txt probe bypasses fetchHtmlImpl, so it gets the
+        // fully resolved (stealth-aware) UA through a separate field.
+        sitemapProbeUserAgent: wireUserAgent(
+          opts?.userAgent ?? options.userAgent,
+          resolveStealth(merged.stealth),
+        ),
+      });
+    },
+    crawl: (seedUrl, opts) => crawlImpl(fetchHtmlImpl, seedUrl, opts),
   };
 }
 
@@ -762,4 +804,72 @@ export function scrapeManySafe<S extends FieldSpecRecord>(
   options?: ScrapeOptions,
 ): Promise<Array<ScrapeBatchItem<S>>> {
   return defaultScraper.scrapeManySafe(urls, fields, options);
+}
+
+/**
+ * Discover the URLs of a site through the shared default scraper.
+ *
+ * Strategy: `Sitemap:` directives from robots.txt plus `/sitemap.xml` are
+ * parsed as sitemap XML (a `<sitemapindex>` recurses into its children,
+ * bounded at 50 sitemap documents; `<urlset>` entries carry `<loc>` and
+ * optional `<lastmod>`). When no sitemap yields URLs, the seed page itself is
+ * fetched and its same-origin `a[href]` links are returned instead —
+ * {@link MapResult.source} records which strategy answered.
+ *
+ * Every fetch goes through the normal scraper path: robots.txt is honored,
+ * same-origin requests serialize, `requestDelay` paces them, and failures
+ * retry per the shared policy. Results are normalized (absolute, fragment
+ * stripped) and deduplicated; `options.limit` truncates.
+ *
+ * @param url Any URL on the site to map. The sitemap probe uses only its
+ *   origin (robots.txt `Sitemap:` directives plus `/sitemap.xml`); when no
+ *   sitemap yields URLs, this exact page is fetched and its links returned.
+ * @param options Per-call options ({@link MapOptions}); anything unset falls
+ *   back to the default scraper's defaults.
+ * @returns The discovered URLs and how they were found.
+ * @throws {ConfigError} On an unparseable or non-http(s) `url`, or an invalid
+ *   `limit`. The seed-page fetch in the links fallback may also throw any
+ *   {@link ScrapeError} a normal fetch would.
+ *
+ * @example
+ * const { urls, source } = await map("https://example.com", { limit: 500 });
+ * // source: "sitemap" | "links"; urls[i]: { url, lastModified? }
+ */
+export function map(url: string | URL, options?: MapOptions): Promise<MapResult> {
+  return defaultScraper.map(url, options);
+}
+
+/**
+ * Recursively crawl same-origin pages breadth-first from `seedUrl`, through
+ * the shared default scraper.
+ *
+ * Only links on the seed's origin are followed (`URL.origin` — http/https on
+ * the same host are different origins), deduplicated on the normalized URL.
+ * `maxDepth` (default 2) bounds link distance from the seed, `maxPages`
+ * (default 50) caps total fetches, and `include`/`exclude` filter discovered
+ * URLs by pattern. With `fields` set, each fetched page also gets a spec
+ * extraction into {@link CrawlPage.data}.
+ *
+ * Every page fetch goes through the normal scraper path — robots, per-origin
+ * serialization, `requestDelay`, retries, stealth all apply — and fetches are
+ * issued sequentially, in BFS order. A failing page is recorded in
+ * {@link CrawlResult.pages} with `error` set rather than aborting the crawl;
+ * an aborted `options.signal` stops dequeuing and returns what was collected.
+ *
+ * @param seedUrl The page to start from (always visited, depth 0).
+ * @param options Per-call options ({@link CrawlOptions}).
+ * @returns Per-page outcomes plus `visited`/`skipped` counters.
+ * @throws {ConfigError} On an unparseable or non-http(s) `seedUrl`, or invalid
+ *   `maxDepth`/`maxPages`/`include`/`exclude`.
+ *
+ * @example
+ * const result = await crawl("https://example.com/docs", {
+ *   maxDepth: 3,
+ *   include: [/^https:\/\/example\.com\/docs\//],
+ *   fields: { title: "h1" },
+ * });
+ * // result.pages[i]: { url, depth, data?, error? }
+ */
+export function crawl(seedUrl: string | URL, options?: CrawlOptions): Promise<CrawlResult> {
+  return defaultScraper.crawl(seedUrl, options);
 }

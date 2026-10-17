@@ -440,6 +440,16 @@ export interface Scraper {
     fields: S,
     options?: ScrapeOptions,
   ): Promise<Array<ScrapeBatchItem<S>>>;
+  /**
+   * Discover the URLs of a site: declared sitemaps first, the seed page's own
+   * links as fallback. See {@link MapResult} for the result shape.
+   */
+  map(url: string | URL, options?: MapOptions): Promise<MapResult>;
+  /**
+   * Recursively crawl same-origin pages breadth-first from `seedUrl`. See
+   * {@link CrawlOptions} for depth/page bounds and filters.
+   */
+  crawl(seedUrl: string | URL, options?: CrawlOptions): Promise<CrawlResult>;
 }
 
 /** One entry of a batch scrape that never rejects. */
@@ -462,3 +472,112 @@ export type ScrapeBatchItem<S extends FieldSpecRecord> =
       /** HTTP status, present only when an {@link HttpError} carried one. */
       readonly status?: number;
     };
+
+/** Options controlling {@link Scraper.map} / the standalone `map`. */
+export interface MapOptions extends FetchHtmlOptions {
+  /**
+   * Maximum number of URLs returned, applied after dedup and normalization.
+   * Must be a non-negative integer.
+   */
+  limit?: number;
+}
+
+/** One discovered URL in a {@link MapResult}. */
+export interface MapEntry {
+  /** The normalized URL: absolute, fragment stripped, deduplicated. */
+  url: string;
+  /** The `<lastmod>` value verbatim, when the sitemap provided one. */
+  lastModified?: string;
+}
+
+/** The outcome of {@link Scraper.map} / the standalone `map`. */
+export interface MapResult {
+  /** Discovered URLs, deduplicated and normalized. */
+  urls: MapEntry[];
+  /**
+   * How the URLs were discovered: `"sitemap"` when at least one sitemap
+   * document yielded entries, `"links"` when `map` fell back to extracting
+   * same-origin anchors from the seed page itself.
+   */
+  source: "sitemap" | "links";
+}
+
+/** Options controlling {@link Scraper.crawl} / the standalone `crawl`. */
+export interface CrawlOptions extends ScrapeOptions {
+  /**
+   * Ignored by crawl — inherited from {@link ScrapeOptions} only. Extraction
+   * always resolves URLs against each page's own post-redirect URL, never a
+   * caller-supplied base.
+   */
+  baseUrl?: string | URL;
+  /**
+   * Ignored by crawl — inherited from {@link ScrapeOptions} only. Page
+   * fetches are deliberately sequential (BFS order, one at a time) for
+   * politeness; a crawl never parallelises.
+   */
+  concurrency?: number;
+  /**
+   * How deep the crawl follows links from the seed: `0` fetches only the seed,
+   * `1` also fetches its direct links, and so on. Default `2`. Must be a
+   * non-negative integer.
+   */
+  maxDepth?: number;
+  /**
+   * Hard cap on pages fetched — politeness, not a target. The crawl stops
+   * dequeuing once reached; URLs still queued count toward
+   * {@link CrawlResult.skipped}. Default `50`. Must be a non-negative integer.
+   */
+  maxPages?: number;
+  /**
+   * Allowlist: when set and non-empty, a discovered URL is only enqueued when
+   * it matches at least one pattern. Evaluated on the normalized URL string.
+   * The seed itself is always visited.
+   */
+  include?: RegExp[];
+  /**
+   * Blocklist: a discovered URL matching any pattern is never enqueued.
+   * Evaluated on the normalized URL string, after {@link CrawlOptions.include}.
+   * The seed itself is always visited — it is enqueued before filters apply.
+   */
+  exclude?: RegExp[];
+  /**
+   * Optional per-page extraction spec: when set, every successfully fetched
+   * page also gets its fields extracted into {@link CrawlPage.data} — the same
+   * spec semantics as {@link Scraper.scrape} (page URL as `baseUrl`).
+   */
+  fields?: FieldSpecRecord;
+}
+
+/** One visited — or attempted — page of a crawl. */
+export interface CrawlPage {
+  /** The normalized URL that was requested. */
+  url: string;
+  /** Link distance from the seed (the seed itself is `0`). */
+  depth: number;
+  /**
+   * Extracted fields, present only when {@link CrawlOptions.fields} was set
+   * and the page's HTML was parsed successfully.
+   */
+  data?: Record<string, unknown>;
+  /**
+   * Why this page failed — always a {@link ScrapeError} subclass. A failed
+   * page does not abort the crawl; any links its HTML still yielded are
+   * enqueued normally.
+   */
+  error?: ScrapeError;
+}
+
+/** The outcome of {@link Scraper.crawl} / the standalone `crawl`. */
+export interface CrawlResult {
+  /** Every dequeued URL, in BFS order, with its outcome. */
+  pages: CrawlPage[];
+  /** Pages whose HTTP request completed (a response came back). */
+  visited: number;
+  /**
+   * Candidate URLs that were discovered but never fetched: filtered out by
+   * `include`/`exclude`, or left queued when `maxPages` or an abort stopped
+   * the crawl. Duplicate links are not counted — they were already covered by
+   * the page that first normalized to the same URL.
+   */
+  skipped: number;
+}

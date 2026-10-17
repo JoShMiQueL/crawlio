@@ -21,8 +21,10 @@ export { parseHtml } from "./parse.js";
 export type { RobotsAgent } from "./robots.js";
 export { fetchRobotsTxt, parseRobots, robotsAllowed, robotsUrlFor } from "./robots.js";
 export {
+  crawl,
   createScraper,
   fetchHtml,
+  map,
   scrape,
   scrape as scrapeUrl,
   scrapeAll,
@@ -33,6 +35,9 @@ export type {
   CaptchaChallenge,
   CaptchaSolution,
   CaptchaSolver,
+  CrawlOptions,
+  CrawlPage,
+  CrawlResult,
   ExtractOptions,
   ExtractResult,
   FetchHtmlOptions,
@@ -40,6 +45,9 @@ export type {
   FieldSpec,
   FieldSpecRecord,
   FieldValue,
+  MapEntry,
+  MapOptions,
+  MapResult,
   ParseOptions,
   RequestDelay,
   ScrapeBatchItem,
