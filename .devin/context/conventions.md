@@ -47,4 +47,4 @@ Items marked **[decided]** are project policy for a scraping SDK. The stack belo
 - **Deterministic parsing:** parsing/extraction logic is pure and unit-testable against recorded fixtures — no network calls inside parser code.
 
 ## Docs
-- **[placeholder]** where canonical docs live, if any.
+- **[decided]** Canonical docs: `AGENTS.md` (agent rules, hard rules, commands) and `.devin/context/*` (this context system) are the sources of truth; `README.md` is the public-facing doc.

@@ -1,10 +1,10 @@
-# scrape-sdk — agent instructions
+# crawlio — agent instructions
 
 ## What this is
 
-`scrape-sdk` — a deliberately simple, typed web scraping SDK for **static HTML**:
+`crawlio` — a deliberately simple, typed web scraping SDK for **static HTML**:
 HTTP fetch + HTML parsing + CSS-selector field extraction, with types inferred from
-the extraction spec. Pre-1.0 and unpublished; the npm name is a placeholder.
+the extraction spec. Pre-1.0 and unpublished.
 
 ## Stack
 
@@ -52,4 +52,5 @@ This project uses a Devin multi-agent system in `.devin/`:
 
 ## Roadmap
 
-v1 is static HTML only; headless-browser rendering is explicitly out of scope for now.
+v1 ships a static-HTML core behind a `render` seam; a headless engine plugs in
+later via optional injection (peer-dep/dynamic import) — never bundled.

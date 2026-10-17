@@ -51,7 +51,7 @@ describe("fetchHtml", () => {
     const { impl, calls } = staticFetch("<html></html>");
     await fetchHtml("https://example.com/", { fetch: impl, robots: false });
     const headers = new Headers(calls[0]?.init?.headers);
-    expect(headers.get("user-agent")).toContain("scrape-sdk/");
+    expect(headers.get("user-agent")).toContain("crawlio/");
   });
 
   it("uses the injected fetch, never the global one", async () => {

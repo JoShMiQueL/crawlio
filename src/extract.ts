@@ -4,7 +4,7 @@ import type { ExtractOptions, ExtractResult, FieldSpec, FieldSpecRecord } from "
 
 /**
  * The DOM node type behind a cheerio selection, derived from cheerio's own public
- * types so scrape-sdk never has to reach for `domhandler` directly.
+ * types so crawlio never has to reach for `domhandler` directly.
  */
 type ScopeNode = ReturnType<CheerioAPI>[number];
 

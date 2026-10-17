@@ -12,6 +12,6 @@ describe("smoke", () => {
       version: string;
     };
     expect(VERSION).toBe(pkg.version);
-    expect(DEFAULT_USER_AGENT).toBe(`scrape-sdk/${pkg.version}`);
+    expect(DEFAULT_USER_AGENT).toBe(`crawlio/${pkg.version}`);
   });
 });

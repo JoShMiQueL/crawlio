@@ -1,7 +1,7 @@
 /**
- * The scrape-sdk error taxonomy.
+ * The crawlio error taxonomy.
  *
- * Every error scrape-sdk itself throws is a `ScrapeError` or one of its subclasses,
+ * Every error crawlio itself throws is a `ScrapeError` or one of its subclasses,
  * so callers can branch on `err.code` instead of matching message strings. That
  * includes errors raised by user callbacks the SDK invokes (`transform`): a throw
  * from one of those is wrapped in a {@link ConfigError} with the original kept as
@@ -61,7 +61,7 @@ export interface ScrapeErrorOptions {
   statusText?: string;
 }
 
-/** Base class for every error thrown by scrape-sdk. */
+/** Base class for every error thrown by crawlio. */
 export class ScrapeError extends Error {
   /** Machine-readable failure category. */
   readonly code: ScrapeErrorCode;

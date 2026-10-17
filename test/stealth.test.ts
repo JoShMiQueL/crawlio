@@ -31,7 +31,7 @@ describe("stealth headers", () => {
     const { impl, calls } = recordingFetch(() => okHtml());
     await fetchHtml("https://example.com/", { fetch: impl, robots: false });
     const h = calls[0]?.headers;
-    expect(h?.get("user-agent")).toContain("scrape-sdk/");
+    expect(h?.get("user-agent")).toContain("crawlio/");
     expect(h?.get("sec-ch-ua")).toBeNull();
     expect(h?.get("sec-fetch-dest")).toBeNull();
     expect(h?.get("accept-language")).toBeNull();
@@ -97,7 +97,7 @@ describe("stealth headers", () => {
     const { impl, calls } = recordingFetch(() => okHtml());
     const scraper = createScraper({ fetch: impl, robots: false, stealth: true });
     await scraper.fetchHtml("https://example.com/", { stealth: false });
-    expect(calls[0]?.headers.get("user-agent")).toContain("scrape-sdk/");
+    expect(calls[0]?.headers.get("user-agent")).toContain("crawlio/");
     expect(calls[0]?.headers.get("sec-ch-ua")).toBeNull();
   });
 
@@ -445,7 +445,7 @@ describe("captcha solver", () => {
     expect(calls).toHaveLength(2);
     expect(calls[1]?.headers.get("cookie")).toContain("cf_clearance=solved-token");
     // No stealth: honest UA — except where the solver bound its own.
-    expect(calls[0]?.headers.get("user-agent")).toContain("scrape-sdk/");
+    expect(calls[0]?.headers.get("user-agent")).toContain("crawlio/");
   });
 
   it("detects a Turnstile widget page and extracts the sitekey", async () => {

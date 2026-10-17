@@ -1,5 +1,5 @@
 /**
- * scrape-sdk — simple, typed web scraping for static HTML.
+ * crawlio — simple, typed web scraping for static HTML.
  *
  * @packageDocumentation
  */

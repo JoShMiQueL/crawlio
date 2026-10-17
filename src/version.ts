@@ -4,5 +4,5 @@ const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url),
   version: string;
 };
 
-/** Package version of `scrape-sdk`. */
+/** Package version of `crawlio`. */
 export const VERSION: string = pkg.version;

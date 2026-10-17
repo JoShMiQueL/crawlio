@@ -308,7 +308,7 @@ export interface FetchHtmlOptions {
   requestDelay?: RequestDelay;
   /**
    * Opt-in stealth behaviour. `false`/absent (the default) keeps the honest,
-   * identifiable `scrape-sdk/<version>` User-Agent and minimal headers.
+   * identifiable `crawlio/<version>` User-Agent and minimal headers.
    * `true` enables sensible defaults (a modern desktop Chrome profile);
    * a {@link StealthOptions} object gives control.
    *
@@ -370,7 +370,7 @@ export interface ScrapeOptions extends FetchHtmlOptions {
 export interface ScraperOptions {
   /**
    * Default User-Agent header. Falls back to an identifiable
-   * `scrape-sdk/<version>`; a per-call `userAgent` wins.
+   * `crawlio/<version>`; a per-call `userAgent` wins.
    */
   userAgent?: string;
   /** Default per-request timeout in milliseconds. */

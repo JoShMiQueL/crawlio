@@ -1,4 +1,4 @@
-# scrape-sdk — project context
+# crawlio — project context
 
 Task-scoped context for agents. The `contextscout` agent reads `navigation.md`
 to route tasks to the right files below.

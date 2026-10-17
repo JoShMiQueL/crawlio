@@ -1,5 +1,5 @@
 {
-  "name": "scrape-sdk",
+  "name": "crawlio",
   "version": "0.1.0",
   "description": "Simple, typed web scraping for static HTML",
   "keywords": [
@@ -14,13 +14,13 @@
     "extraction",
     "typescript"
   ],
-  "homepage": "https://github.com/JoShMiQueL/scrape-sdk#readme",
+  "homepage": "https://github.com/JoShMiQueL/crawlio#readme",
   "bugs": {
-    "url": "https://github.com/JoShMiQueL/scrape-sdk/issues"
+    "url": "https://github.com/JoShMiQueL/crawlio/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/JoShMiQueL/scrape-sdk.git"
+    "url": "git+https://github.com/JoShMiQueL/crawlio.git"
   },
   "author": "JoShMiQueL",
   "license": "MIT",

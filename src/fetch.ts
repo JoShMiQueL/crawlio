@@ -6,10 +6,10 @@ import type { FetchHtmlOptions, FetchHtmlResult } from "./types.js";
 import { VERSION } from "./version.js";
 
 /**
- * Default User-Agent: an identifiable `scrape-sdk/<version>` — honest by
+ * Default User-Agent: an identifiable `crawlio/<version>` — honest by
  * default, overridable per call or per scraper via `userAgent`.
  */
-export const DEFAULT_USER_AGENT = `scrape-sdk/${VERSION}`;
+export const DEFAULT_USER_AGENT = `crawlio/${VERSION}`;
 /** Default per-request timeout in milliseconds. */
 export const DEFAULT_TIMEOUT = 10_000;
 /** Default number of retries after the first attempt (4 tries in total). */

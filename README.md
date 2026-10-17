@@ -1,4 +1,4 @@
-# scrape-sdk
+# crawlio
 
 Simple, typed web scraping for static HTML: fetch a page, parse it, and extract
 typed fields via CSS selectors. Pre-1.0 — the API may still change.
@@ -6,9 +6,9 @@ typed fields via CSS selectors. Pre-1.0 — the API may still change.
 ## Install
 
 ```sh
-pnpm add scrape-sdk
+pnpm add crawlio
 # or
-npm i scrape-sdk
+npm i crawlio
 ```
 
 Requires Node.js >= 22.
@@ -16,7 +16,7 @@ Requires Node.js >= 22.
 ## Usage
 
 ```ts
-import { scrape } from "scrape-sdk";
+import { scrape } from "crawlio";
 
 const page = await scrape("https://example.com", {
   title: "h1",
@@ -50,7 +50,7 @@ The defaults are deliberately polite: robots.txt is honored
 origin are serialized (`serializePerOrigin: true`), `requestDelay` can add a
 minimum gap in milliseconds between consecutive same-origin requests, a
 global concurrency cap of 4 applies, and every request carries an
-identifiable `scrape-sdk/<version>` User-Agent.
+identifiable `crawlio/<version>` User-Agent.
 
 Everything is unlockable: `robots: false` skips robots.txt,
 `serializePerOrigin: false` lets same-origin requests run concurrently, and
@@ -65,7 +65,7 @@ responsibility — respect the target site's terms and applicable law.
 
 `stealth` is available on `createScraper`, and per call on `fetchHtml` /
 `scrape*` (the call-level value wins). `false` or absent keeps the honest
-defaults untouched — an identifiable `scrape-sdk/<version>` UA and minimal
+defaults untouched — an identifiable `crawlio/<version>` UA and minimal
 headers.
 
 ```ts
