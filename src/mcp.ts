@@ -21,14 +21,16 @@ async function main(): Promise<void> {
   // Handlers attach BEFORE connect: a client that disconnects during the
   // handshake must still release the renderer, and transport/parse errors
   // must not be swallowed — stderr only, stdout is the JSON-RPC channel.
-  server.onerror = (error) => {
+  // `server` is the high-level `McpServer`; onerror/onclose live on the
+  // underlying `Server` it wraps.
+  server.server.onerror = (error) => {
     process.stderr.write(`crawlio-mcp: ${error.message}\n`);
   };
   // One lazy renderer is shared by every tool call — release it whenever
   // the server goes away: a transport close (stdin EOF, client exit) or a
   // signal. `tools.close()` is idempotent, so onclose + the signal path may
   // both fire it; a throwing renderer.close() must not crash the shutdown.
-  server.onclose = () => {
+  server.server.onclose = () => {
     void tools.close().catch(() => undefined);
   };
 

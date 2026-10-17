@@ -250,9 +250,10 @@ crawlio --help | --version
   pm's npx-equivalent (`npx`, `pnpm dlx`, `bunx`, `yarn dlx`) for
   `playwright-core install <browser>` or `puppeteer browsers install
   chrome`. `--mcp` instead runtime-installs `@modelcontextprotocol/sdk`
-  (`pnpm add`, no `-D` — the `crawlio-mcp`/`crawlio/mcp` peer dep runs
-  inside your own server process); alone it is the whole plan, combined
-  with `--engine`/`--browser` it is appended. `--dry-run` prints the plan
+  and `zod` (`pnpm add`, no `-D` — the `crawlio-mcp`/`crawlio/mcp` peer
+  deps run inside your own server process; the SDK's own peer contract
+  makes `zod` required); alone it is the whole plan, combined with
+  `--engine`/`--browser` it is appended. `--dry-run` prints the plan
   without running it.
 
 Errors go to stderr with exit code 1.
@@ -260,15 +261,18 @@ Errors go to stderr with exit code 1.
 ## MCP server
 
 `crawlio-mcp` exposes the toolkit to MCP clients (Claude Desktop, agents)
-over stdio. It needs the optional peer `@modelcontextprotocol/sdk`:
+over stdio. It needs the optional peers `@modelcontextprotocol/sdk` and
+`zod` (the SDK validates tool arguments through zod — its own peer
+contract marks it required):
 
 ```sh
 pnpm add crawlio && crawlio install --mcp
 ```
 
-(`crawlio install --mcp` just runs `pnpm add @modelcontextprotocol/sdk`
-through the detected package manager — a runtime dependency, not `-D` —
-so installing the SDK directly yourself is the same thing.)
+(`crawlio install --mcp` just runs `pnpm add @modelcontextprotocol/sdk
+zod` through the detected package manager — runtime dependencies, not
+`-D` — so installing the two packages directly yourself is the same
+thing.)
 
 Claude Desktop config (`claude_desktop_config.json`):
 
@@ -330,15 +334,35 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { createCrawlioMcpServer } from "crawlio/mcp";
 
 const { server, tools } = await createCrawlioMcpServer();
-server.onclose = () => void tools.close().catch(() => undefined);
+// `server` is the high-level McpServer — onclose/onerror live on the
+// underlying Server it wraps.
+server.server.onclose = () => void tools.close().catch(() => undefined);
 await server.connect(new StdioServerTransport());
 ```
 
+Same server, any transport — over HTTP it's the Streamable HTTP transport
+(the SSE transport is deprecated; stateless mode needs no session
+handling):
+
+```ts
+import { createServer } from "node:http";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+
+const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+await server.connect(transport);
+createServer((req, res) => void transport.handleRequest(req, res)).listen(3000);
+```
+
+For Fetch-style runtimes (Workers, Deno, Bun) swap in
+`WebStandardStreamableHTTPServerTransport` from
+`@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js` — same
+`connect`, `Request`/`Response` in place of `req`/`res`.
+
 Like `crawlio/playwright` without `playwright-core`, `import "crawlio/mcp"`
-works with the peer absent — the SDK is only `import()`ed inside
+works with the peers absent — the SDK and zod are only `import()`ed inside
 `createCrawlioMcpServer`, where a missing install surfaces as a
 `ConfigError`. `createCrawlioTools` (the transport-free tool layer) never
-touches it at all.
+touches either at all.
 
 ## Stealth (opt-in)
 

@@ -82,7 +82,8 @@
     "publint": "0.3.25",
     "puppeteer-core": "25.13.0",
     "typescript": "5.9.3",
-    "vitest": "5.0.5"
+    "vitest": "5.0.5",
+    "zod": "4.6.7"
   },
   "dependencies": {
     "cheerio": "1.2.0",
@@ -94,7 +95,8 @@
   "peerDependencies": {
     "@modelcontextprotocol/sdk": ">=1.32",
     "playwright-core": ">=1.40",
-    "puppeteer-core": ">=24.21"
+    "puppeteer-core": ">=24.21",
+    "zod": "^3.25 || ^4.0"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/sdk": {
@@ -104,6 +106,9 @@
       "optional": true
     },
     "puppeteer-core": {
+      "optional": true
+    },
+    "zod": {
       "optional": true
     }
   }

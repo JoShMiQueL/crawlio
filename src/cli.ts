@@ -105,10 +105,10 @@ search options:
   --limit N              Maximum results returned.
 
 install options:
-  --mcp                  Runtime-install @modelcontextprotocol/sdk — the
-                         crawlio-mcp / crawlio/mcp peer dep. Alone it is the
-                         whole plan; combined with --engine/--browser it is
-                         appended to the engine install.
+  --mcp                  Runtime-install @modelcontextprotocol/sdk + zod —
+                         the crawlio-mcp / crawlio/mcp peer deps. Alone it is
+                         the whole plan; combined with --engine/--browser it
+                         is appended to the engine install.
   --engine playwright|puppeteer   Engine to install (default playwright).
   --browser chromium|firefox|webkit   Playwright browser (default chromium).
   --dry-run              Print the commands without running them.

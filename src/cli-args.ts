@@ -589,12 +589,17 @@ export function installCommands(
 
 /**
  * The `crawlio install --mcp` plan — a single `<pm> add
- * @modelcontextprotocol/sdk` step. Unlike the engine packages it is a
- * RUNTIME dependency (`addRuntime`, no `-D`): the package's `Server` runs
- * inside the user's own `crawlio-mcp`/`crawlio/mcp` process, not just at
- * development time.
+ * @modelcontextprotocol/sdk zod` step installing BOTH packages: the SDK's
+ * own peer contract marks `zod` required (`peerDependenciesMeta.optional:
+ * false`) and `McpServer` validates tool arguments through it. Unlike the
+ * engine packages these are RUNTIME dependencies (`addRuntime`, no `-D`):
+ * the server runs inside the user's own `crawlio-mcp`/`crawlio/mcp`
+ * process, not just at development time.
  */
 export function mcpInstallCommand(pm: PackageManager): InstallCommand {
   const { addRuntime } = PM_COMMANDS[pm];
-  return { command: addRuntime.command, args: [...addRuntime.args, "@modelcontextprotocol/sdk"] };
+  return {
+    command: addRuntime.command,
+    args: [...addRuntime.args, "@modelcontextprotocol/sdk", "zod"],
+  };
 }

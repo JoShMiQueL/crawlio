@@ -337,25 +337,26 @@ describe("installCommands — the crawlio install plan", () => {
     ]);
   });
 
-  it("--mcp: runtime-adds @modelcontextprotocol/sdk (no dev flag) per pm", () => {
-    // The SDK runs inside the user's crawlio-mcp/crawlio/mcp process — a
-    // runtime dep, so the dev-install spellings (`-D`/`--save-dev`/`-d`)
-    // must NOT appear.
+  it("--mcp: runtime-adds @modelcontextprotocol/sdk + zod (no dev flag) per pm", () => {
+    // Both run inside the user's crawlio-mcp/crawlio/mcp process — runtime
+    // deps, so the dev-install spellings (`-D`/`--save-dev`/`-d`) must NOT
+    // appear. `zod` rides along because the SDK's own peer contract marks
+    // it required and `McpServer` validates through it.
     expect(mcpInstallCommand("npm")).toEqual({
       command: "npm",
-      args: ["install", "@modelcontextprotocol/sdk"],
+      args: ["install", "@modelcontextprotocol/sdk", "zod"],
     });
     expect(mcpInstallCommand("pnpm")).toEqual({
       command: "pnpm",
-      args: ["add", "@modelcontextprotocol/sdk"],
+      args: ["add", "@modelcontextprotocol/sdk", "zod"],
     });
     expect(mcpInstallCommand("bun")).toEqual({
       command: "bun",
-      args: ["add", "@modelcontextprotocol/sdk"],
+      args: ["add", "@modelcontextprotocol/sdk", "zod"],
     });
     expect(mcpInstallCommand("yarn")).toEqual({
       command: "yarn",
-      args: ["add", "@modelcontextprotocol/sdk"],
+      args: ["add", "@modelcontextprotocol/sdk", "zod"],
     });
   });
 });

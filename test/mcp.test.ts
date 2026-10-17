@@ -442,6 +442,7 @@ describe("protocol smoke — real Server over InMemoryTransport", () => {
       expect(scrapeTool?.inputSchema).toMatchObject({
         type: "object",
         required: ["url"],
+        additionalProperties: false,
       });
 
       const result = await client.callTool({
@@ -454,7 +455,75 @@ describe("protocol smoke — real Server over InMemoryTransport", () => {
       const failed = await client.callTool({ name: "search", arguments: {} });
       expect(failed.isError).toBe(true);
       const failedText = (failed.content as Array<{ text: string }>)[0]?.text;
-      expect(failedText).toMatch(/`query`/);
+      // Missing `query` is rejected by McpServer's zod validation BEFORE
+      // the handler runs — the message names the field, not our
+      // ConfigError wording.
+      expect(failedText).toMatch(/query/);
+    } finally {
+      await client.close();
+      await server.close();
+      await tools.close();
+    }
+  });
+
+  it("rejects unknown arguments over the wire — the strict schema does not strip them", async () => {
+    // `depth` is not a crawl argument (`maxDepth` is). A non-strict zod
+    // object would STRIP it before validation and the crawl would run —
+    // a typo'd client call producing silently wrong output. The strict
+    // inputSchema must reject it with an isError result naming the key.
+    const { server, tools } = await createCrawlioMcpServer({});
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      const result = await client.callTool({
+        name: "crawl",
+        arguments: { url: "https://example.com/", depth: 1 },
+      });
+      expect(result.isError).toBe(true);
+      const text = (result.content as Array<{ text: string }>)[0]?.text;
+      expect(text).toMatch(/depth/);
+    } finally {
+      await client.close();
+      await server.close();
+      await tools.close();
+    }
+  });
+
+  it("advertises exactly `definitions`' surface — names, fields, required", async () => {
+    // The zod shapes handed to registerTool generate the advertised
+    // inputSchema; `definitions` is the handler-side contract. Comparing
+    // both through a real client pins them together — a shape that drifts
+    // from the handlers' own validation fails here, not silently.
+    const { server, tools } = await createCrawlioMcpServer({});
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      const list = await client.listTools();
+      expect(list.tools.map((tool) => tool.name)).toEqual(tools.definitions.map((def) => def.name));
+      for (const def of tools.definitions) {
+        const declared = def.inputSchema as {
+          required?: string[];
+          properties?: Record<string, { type?: string; enum?: string[] }>;
+        };
+        const advertised = list.tools.find((tool) => tool.name === def.name)?.inputSchema as
+          | { required?: string[]; properties?: Record<string, { type?: string; enum?: string[] }> }
+          | undefined;
+        expect(advertised, `tool ${def.name} advertised`).toBeDefined();
+        expect([...(advertised?.required ?? [])].sort()).toEqual(
+          [...(declared.required ?? [])].sort(),
+        );
+        const declaredProps = declared.properties ?? {};
+        const advertisedProps = advertised?.properties ?? {};
+        expect(Object.keys(advertisedProps).sort()).toEqual(Object.keys(declaredProps).sort());
+        for (const [name, prop] of Object.entries(declaredProps)) {
+          expect(advertisedProps[name]?.type, `${def.name}.${name} type`).toBe(prop.type);
+          if (prop.enum !== undefined) {
+            expect(advertisedProps[name]?.enum).toEqual(prop.enum);
+          }
+        }
+      }
     } finally {
       await client.close();
       await server.close();
@@ -477,7 +546,9 @@ describe("protocol smoke — real Server over InMemoryTransport", () => {
     // The mcp.ts wiring: onclose releases the shared renderer and must
     // survive a throwing renderer.close() — an unhandled rejection on
     // transport close crashes the process.
-    server.onclose = () => {
+    // `server` is the high-level McpServer; onclose lives on the Server
+    // it wraps — the same place the mcp.ts binary wires it.
+    server.server.onclose = () => {
       void tools.close().catch(() => undefined);
     };
     const unhandled: unknown[] = [];
