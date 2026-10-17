@@ -1,5 +1,10 @@
 import { ConfigError } from "../errors.js";
 import type { RenderCallOptions, RenderedPage, Renderer } from "../render.js";
+import {
+  assertExecutablePathChannelExclusive,
+  assertWaitForSelector,
+  assertWaitForTimeout,
+} from "./validate.js";
 
 /** The lazily-imported `puppeteer-core` module — a peer dep, never bundled. */
 type PuppeteerCore = typeof import("puppeteer-core");
@@ -122,20 +127,9 @@ export function puppeteerRenderer(options: PuppeteerRendererOptions = {}): Puppe
       `\`waitUntil\` must be "load", "domcontentloaded", "networkidle0" or "networkidle2", got ${JSON.stringify(options.waitUntil)}`,
     );
   }
-  if (options.executablePath !== undefined && options.channel !== undefined) {
-    throw new ConfigError("`executablePath` and `channel` are mutually exclusive — pick one");
-  }
-  if (options.waitForSelector !== undefined && options.waitForSelector.trim() === "") {
-    throw new ConfigError("`waitForSelector` must be a non-empty CSS selector");
-  }
-  if (
-    options.waitForTimeout !== undefined &&
-    (!Number.isFinite(options.waitForTimeout) || options.waitForTimeout < 0)
-  ) {
-    throw new ConfigError(
-      `\`waitForTimeout\` must be a non-negative finite number of milliseconds, got ${JSON.stringify(options.waitForTimeout)}`,
-    );
-  }
+  assertExecutablePathChannelExclusive(options.executablePath, options.channel);
+  assertWaitForSelector(options.waitForSelector);
+  assertWaitForTimeout(options.waitForTimeout);
   if (options.channel !== undefined && !CHANNELS.has(options.channel)) {
     throw new ConfigError(
       `\`channel\` must be "chrome", "chrome-beta", "chrome-canary" or "chrome-dev", got ${JSON.stringify(options.channel)}` +
@@ -195,17 +189,8 @@ export function puppeteerRenderer(options: PuppeteerRendererOptions = {}): Puppe
       // Per-call settle options get the same validation as the constructor —
       // a blank selector or NaN/negative wait is a ConfigError, not a silent
       // skip or a raw engine error.
-      if (call?.waitForSelector !== undefined && call.waitForSelector.trim() === "") {
-        throw new ConfigError("`waitForSelector` must be a non-empty CSS selector");
-      }
-      if (
-        call?.waitForTimeout !== undefined &&
-        (!Number.isFinite(call.waitForTimeout) || call.waitForTimeout < 0)
-      ) {
-        throw new ConfigError(
-          `\`waitForTimeout\` must be a non-negative finite number of milliseconds, got ${JSON.stringify(call.waitForTimeout)}`,
-        );
-      }
+      assertWaitForSelector(call?.waitForSelector);
+      assertWaitForTimeout(call?.waitForTimeout);
       if (call?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
       const browser = await launch();
       // A fresh context per render: read-only isolation, no shared profile —

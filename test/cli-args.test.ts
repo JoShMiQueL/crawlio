@@ -99,7 +99,9 @@ describe("package-manager detection", () => {
   it("normalizes the packageManager field", () => {
     expect(packageManagerFromField("pnpm@12.14.0")).toBe("pnpm");
     expect(packageManagerFromField("npm@10.9.0")).toBe("npm");
-    expect(packageManagerFromField("yarn@4.1.0")).toBeUndefined();
+    expect(packageManagerFromField("bun@1.2.0")).toBe("bun");
+    expect(packageManagerFromField("yarn@4.1.0")).toBe("yarn");
+    expect(packageManagerFromField("deno@2.0.0")).toBeUndefined();
     expect(packageManagerFromField(undefined)).toBeUndefined();
   });
 
@@ -121,20 +123,54 @@ describe("package-manager detection", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("sniffs lockfiles in pnpm → bun → yarn order", () => {
+    const dir = mkdtempSync(join(tmpdir(), "crawlio-cli-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "x" }));
+      writeFileSync(join(dir, "yarn.lock"), "");
+      expect(detectPackageManager(dir)).toBe("yarn");
+      // Either bun lockfile form counts — and bun wins over yarn.lock.
+      writeFileSync(join(dir, "bun.lockb"), "");
+      expect(detectPackageManager(dir)).toBe("bun");
+      rmSync(join(dir, "bun.lockb"));
+      writeFileSync(join(dir, "bun.lock"), "");
+      expect(detectPackageManager(dir)).toBe("bun");
+      // pnpm-lock.yaml outranks everything.
+      writeFileSync(join(dir, "pnpm-lock.yaml"), "");
+      expect(detectPackageManager(dir)).toBe("pnpm");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("installCommands — the crawlio install plan", () => {
-  it("playwright: add -D playwright-core then playwright-core install <browser>", () => {
+  it("playwright: add playwright-core then playwright-core install <browser>", () => {
     expect(installCommands("playwright", "firefox", "pnpm")).toEqual([
       { command: "pnpm", args: ["add", "-D", "playwright-core"] },
-      { command: "npx", args: ["playwright-core", "install", "firefox"] },
+      { command: "pnpm", args: ["dlx", "playwright-core", "install", "firefox"] },
     ]);
   });
 
-  it("puppeteer: add -D puppeteer-core then puppeteer browsers install chrome", () => {
+  it("puppeteer: add puppeteer-core then puppeteer browsers install chrome", () => {
     expect(installCommands("puppeteer", "chromium", "npm")).toEqual([
       { command: "npm", args: ["install", "--save-dev", "puppeteer-core"] },
       { command: "npx", args: ["puppeteer", "browsers", "install", "chrome"] },
+    ]);
+  });
+
+  it("bun: `bun add -d` + `bunx` as the npx-equivalent", () => {
+    expect(installCommands("puppeteer", "chromium", "bun")).toEqual([
+      { command: "bun", args: ["add", "-d", "puppeteer-core"] },
+      { command: "bunx", args: ["puppeteer", "browsers", "install", "chrome"] },
+    ]);
+  });
+
+  it("yarn: `yarn add -D` + `yarn dlx` as the npx-equivalent", () => {
+    expect(installCommands("playwright", "chromium", "yarn")).toEqual([
+      { command: "yarn", args: ["add", "-D", "playwright-core"] },
+      { command: "yarn", args: ["dlx", "playwright-core", "install", "chromium"] },
     ]);
   });
 });

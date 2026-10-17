@@ -90,6 +90,9 @@ Only links on the seed's origin are followed. A failing page is recorded with
 returns what was collected. Every fetch goes through the normal pipeline —
 robots.txt, per-origin serialization, delays, retries, and stealth all apply.
 
+Prefer the terminal? The same toolkit ships as a `crawlio` binary —
+`crawlio --help` lists the commands (see [CLI](#cli)).
+
 ## Features
 
 - **Typed field extraction** — declare fields as CSS selectors (or `{ selector,
@@ -124,6 +127,59 @@ the wire.
 
 These limits exist to be a good citizen; disabling them is your
 responsibility — respect the target site's terms and applicable law.
+
+## CLI
+
+The `crawlio` binary ships with the package (`npx crawlio`, or a global
+`pnpm add -g crawlio`). Zero extra dependencies — it is a thin wrapper over
+the library API.
+
+```
+crawlio scrape <url> [--fields 'title=h1;links=a.href@all'] [--render auto|always] [--json]
+crawlio map <url> [--limit N]
+crawlio crawl <url> [--max-depth N] [--max-pages N]
+crawlio install [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--dry-run]
+crawlio --help | --version
+```
+
+- **`scrape`** fetches and extracts, printing JSON to stdout. `--fields`
+  uses a mini-syntax: `name=selector` (text of first match),
+  `name=selector@attr` or `name=selector.attr` for attributes (the `.attr`
+  shorthand applies to common attributes: `href`, `src`, `content`, ...),
+  and a trailing `@all` for arrays — entries separated by `;`. Defaults to
+  `title=title`. One ambiguity to know: `name`, `title`, `value`, `alt`,
+  `content`, `href`, `src`, ... are all shorthand attributes, so
+  `desc=div.name` reads `div`'s `name` attribute — NOT elements with class
+  `name`. For a class whose tail collides with a shorthand word use the
+  bracket form (`div[class~="name"]`) or a fuller selector (`div.name
+  span`); a bare `.name` (or `.name@all`) keeps the class meaning because a
+  leading-dot tail can't be an attribute. `--render` loads an engine
+  adapter dynamically (`--engine playwright|puppeteer`, defaulting to
+  playwright when installed, else puppeteer) with the CLI's stronger
+  `networkidle`/`networkidle0` settle default; `--wait-for <selector>` and
+  `--wait-ms <N>` map onto the settle options above. `--browser` picks the
+  Playwright engine (`chromium`|`firefox`|`webkit`; rejected under
+  `--engine puppeteer`, which is Chrome-only — use `--channel` or
+  `--executable-path` there instead), `--channel <name>` selects a branded
+  channel the engine resolves (`"chrome"`, `"msedge"`, ... for playwright;
+  `"chrome"`, `"chrome-beta"`, ... for puppeteer), and `--executable-path
+  <path>` an explicit binary (mutually exclusive with `--channel`). Under
+  puppeteer `--channel` defaults to `"chrome"` — puppeteer-core resolves no
+  browser without one — covering both a system Chrome and `crawlio
+  install`'s `puppeteer browsers install chrome` download.
+  `--engine`/`--browser`/`--channel`/`--executable-path`/`--wait-for`/
+  `--wait-ms` all require `--render` and error out without it.
+- **`map`/`crawl`** print their JSON result (`--limit`, `--max-depth`,
+  `--max-pages` map to the library options).
+- **`install`** detects the package manager (`packageManager` manifest
+  field → lockfile sniff → npm fallback; npm, pnpm, bun and yarn are
+  recognized) and dev-installs `playwright-core` or `puppeteer-core`
+  (`npm i -D`, `pnpm add -D`, `bun add -d`, `yarn add -D`), then runs the
+  pm's npx-equivalent (`npx`, `pnpm dlx`, `bunx`, `yarn dlx`) for
+  `playwright-core install <browser>` or `puppeteer browsers install
+  chrome`. `--dry-run` prints the plan without running it.
+
+Errors go to stderr with exit code 1.
 
 ## Stealth (opt-in)
 
@@ -341,57 +397,6 @@ Honest limits:
   prefer an isolated environment for hostile targets.
 - **Rendering is read-only** — navigate, wait, return HTML. Browser actions
   (click/fill/type) are a non-goal and live in the sibling project.
-
-## CLI
-
-The `crawlio` binary ships with the package (`npx crawlio`, or a global
-`pnpm add -g crawlio`). Zero extra dependencies — it is a thin wrapper over
-the library API.
-
-```
-crawlio scrape <url> [--fields 'title=h1;links=a.href@all'] [--render auto|always] [--json]
-crawlio map <url> [--limit N]
-crawlio crawl <url> [--max-depth N] [--max-pages N]
-crawlio install [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--dry-run]
-crawlio --help | --version
-```
-
-- **`scrape`** fetches and extracts, printing JSON to stdout. `--fields`
-  uses a mini-syntax: `name=selector` (text of first match),
-  `name=selector@attr` or `name=selector.attr` for attributes (the `.attr`
-  shorthand applies to common attributes: `href`, `src`, `content`, ...),
-  and a trailing `@all` for arrays — entries separated by `;`. Defaults to
-  `title=title`. One ambiguity to know: `name`, `title`, `value`, `alt`,
-  `content`, `href`, `src`, ... are all shorthand attributes, so
-  `desc=div.name` reads `div`'s `name` attribute — NOT elements with class
-  `name`. For a class whose tail collides with a shorthand word use the
-  bracket form (`div[class~="name"]`) or a fuller selector (`div.name
-  span`); a bare `.name` (or `.name@all`) keeps the class meaning because a
-  leading-dot tail can't be an attribute. `--render` loads an engine
-  adapter dynamically (`--engine playwright|puppeteer`, defaulting to
-  playwright when installed, else puppeteer) with the CLI's stronger
-  `networkidle`/`networkidle0` settle default; `--wait-for <selector>` and
-  `--wait-ms <N>` map onto the settle options above. `--browser` picks the
-  Playwright engine (`chromium`|`firefox`|`webkit`; rejected under
-  `--engine puppeteer`, which is Chrome-only — use `--channel` or
-  `--executable-path` there instead), `--channel <name>` selects a branded
-  channel the engine resolves (`"chrome"`, `"msedge"`, ... for playwright;
-  `"chrome"`, `"chrome-beta"`, ... for puppeteer), and `--executable-path
-  <path>` an explicit binary (mutually exclusive with `--channel`). Under
-  puppeteer `--channel` defaults to `"chrome"` — puppeteer-core resolves no
-  browser without one — covering both a system Chrome and `crawlio
-  install`'s `puppeteer browsers install chrome` download.
-  `--engine`/`--browser`/`--channel`/`--executable-path`/`--wait-for`/
-  `--wait-ms` all require `--render` and error out without it.
-- **`map`/`crawl`** print their JSON result (`--limit`, `--max-depth`,
-  `--max-pages` map to the library options).
-- **`install`** detects the package manager (`packageManager` manifest
-  field → lockfile sniff → npm fallback) and runs `<pm> add -D
-  playwright-core` (then `npx playwright-core install <browser>`) or
-  `<pm> add -D puppeteer-core` (then `npx puppeteer browsers install
-  chrome`). `--dry-run` prints the plan without running it.
-
-Errors go to stderr with exit code 1.
 
 ## License
 

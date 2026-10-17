@@ -124,7 +124,7 @@ export function parseCount(value: string | undefined, flag: string): number | un
 }
 
 /** Package managers `crawlio install` knows how to drive. */
-export type PackageManager = "npm" | "pnpm";
+export type PackageManager = "npm" | "pnpm" | "bun" | "yarn";
 
 /**
  * Normalize a `packageManager` manifest field (`"pnpm@12.14.0"` → `"pnpm"`).
@@ -133,13 +133,14 @@ export type PackageManager = "npm" | "pnpm";
 export function packageManagerFromField(field: unknown): PackageManager | undefined {
   if (typeof field !== "string") return undefined;
   const name = field.split("@")[0];
-  return name === "pnpm" || name === "npm" ? name : undefined;
+  return name === "pnpm" || name === "npm" || name === "bun" || name === "yarn" ? name : undefined;
 }
 
 /**
  * Detect the package manager owning `dir`'s install: the `packageManager`
- * field of `dir/package.json` first, then a `pnpm-lock.yaml` sniff, with
- * `npm` as the fallback.
+ * field of `dir/package.json` first, then a lockfile sniff —
+ * `pnpm-lock.yaml` → pnpm, `bun.lock`/`bun.lockb` → bun, `yarn.lock` →
+ * yarn — with `npm` as the fallback.
  */
 export function detectPackageManager(dir: string): PackageManager {
   try {
@@ -152,6 +153,8 @@ export function detectPackageManager(dir: string): PackageManager {
     // No readable package.json — fall through to the lockfile sniff.
   }
   if (existsSync(join(dir, "pnpm-lock.yaml"))) return "pnpm";
+  if (existsSync(join(dir, "bun.lock")) || existsSync(join(dir, "bun.lockb"))) return "bun";
+  if (existsSync(join(dir, "yarn.lock"))) return "yarn";
   return "npm";
 }
 
@@ -162,34 +165,57 @@ export interface InstallCommand {
 }
 
 /**
- * The commands `crawlio install` runs, in order:
+ * Per-manager spellings for {@link installCommands}: `add` dev-installs a
+ * package; `dlx` is the idiomatic npx-equivalent that runs a package's CLI
+ * without installing it — `npx` for npm, `pnpm dlx` for pnpm, `bunx` for
+ * bun, `yarn dlx` for yarn.
+ */
+const PM_COMMANDS: Record<PackageManager, { add: InstallCommand; dlx: InstallCommand }> = {
+  npm: {
+    add: { command: "npm", args: ["install", "--save-dev"] },
+    dlx: { command: "npx", args: [] },
+  },
+  pnpm: {
+    add: { command: "pnpm", args: ["add", "-D"] },
+    dlx: { command: "pnpm", args: ["dlx"] },
+  },
+  bun: {
+    add: { command: "bun", args: ["add", "-d"] },
+    dlx: { command: "bunx", args: [] },
+  },
+  yarn: {
+    add: { command: "yarn", args: ["add", "-D"] },
+    dlx: { command: "yarn", args: ["dlx"] },
+  },
+};
+
+/**
+ * The commands `crawlio install` runs, in order (see {@link PM_COMMANDS}
+ * for the per-manager `add`/`dlx` spellings):
  *
- * - playwright: `<pm> add -D playwright-core`, then `npx playwright-core
- *   install <browser>` — `playwright-core` ships its own CLI, so no extra
- *   package is needed for the browser download.
- * - puppeteer: `<pm> add -D puppeteer-core`, then `npx puppeteer browsers
- *   install chrome` — `puppeteer-core` itself never downloads a browser; the
- *   `puppeteer` package's `@puppeteer/browsers` CLI does (npx fetches it on
- *   demand). Alternatively configure `channel`/`executablePath` and skip the
- *   download.
+ * - playwright: `<pm> add playwright-core` as a dev dependency, then `<dlx>
+ *   playwright-core install <browser>` — `playwright-core` ships its own
+ *   CLI, so no extra package is needed for the browser download.
+ * - puppeteer: `<pm> add puppeteer-core`, then `<dlx> puppeteer browsers
+ *   install chrome` — `puppeteer-core` itself never downloads a browser;
+ *   the `puppeteer` package's `@puppeteer/browsers` CLI does (dlx fetches
+ *   it on demand). Alternatively configure `channel`/`executablePath` and
+ *   skip the download.
  */
 export function installCommands(
   engine: "playwright" | "puppeteer",
   browser: string,
   pm: PackageManager,
 ): InstallCommand[] {
-  const add: InstallCommand =
-    pm === "pnpm"
-      ? { command: "pnpm", args: ["add", "-D"] }
-      : { command: "npm", args: ["install", "--save-dev"] };
+  const { add, dlx } = PM_COMMANDS[pm];
   if (engine === "playwright") {
     return [
       { command: add.command, args: [...add.args, "playwright-core"] },
-      { command: "npx", args: ["playwright-core", "install", browser] },
+      { command: dlx.command, args: [...dlx.args, "playwright-core", "install", browser] },
     ];
   }
   return [
     { command: add.command, args: [...add.args, "puppeteer-core"] },
-    { command: "npx", args: ["puppeteer", "browsers", "install", "chrome"] },
+    { command: dlx.command, args: [...dlx.args, "puppeteer", "browsers", "install", "chrome"] },
   ];
 }
