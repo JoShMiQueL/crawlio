@@ -2,11 +2,11 @@
 
 **Status:** feature-complete for v0.1.0 — pre-publish.
 
-## Phase 0 — Lifecycle *(in progress)*
+## Phase 0 — Lifecycle *(in progress — publish pending)*
 
-- [ ] GitHub repo
-- [ ] CI — lint + typecheck + test + pack (`.github/workflows/ci.yml`)
-- [ ] Branch protection
+- [x] GitHub repo
+- [x] CI — lint + typecheck + test + pack (`.github/workflows/ci.yml`)
+- [x] Branch protection
 - [x] Changelog
 - [ ] npm publish — not yet
 
@@ -14,18 +14,21 @@
 
 **Decided:** the library stays consumable from any current Node runtime.
 Bun already implements the `node:*` APIs the code uses, so crawlio runs on
-Bun today. The work is adopting Bun-native APIs behind
-`typeof Bun !== "undefined"` guards where they genuinely win:
+Bun today. **Baseline verified:** `bun test` runs the full 465-test suite
+green on Bun 1.4 with zero code changes. The work is adopting Bun-native
+APIs behind `typeof Bun !== "undefined"` guards (`src/runtime.ts`'s
+`isBun`) where they genuinely win:
 
 | Bun API | Replaces | Where |
 | --- | --- | --- |
 | `Bun.serve()` | `node:http` | MCP streamable-HTTP transport |
-| `Bun.fetch` (native `proxy:`) | undici dispatcher | fetch layer |
+| `Bun.fetch` (native `proxy:`) | undici dispatcher | fetch layer — **done** (`proxyRequestInit` seam) |
 | `Bun.spawn` | `node:child_process` | subprocesses |
 | `Bun.file` / `Bun.write` | `node:fs` | file I/O |
-| `Bun.sleep` | timer-based sleeps | retry/backoff |
+| `Bun.sleep` | timer-based sleeps | retry/backoff — **done** (scraper `sleep` helper) |
 
-- CI gains a Bun lane alongside the Node lanes.
+- ~~CI gains a Bun lane alongside the Node lanes.~~ **Done** — `check-bun`
+  job (ubuntu, `bun test`) gates `ci-success`.
 - Bonus: `bun build --compile crawlio-mcp` → standalone single-file binary
   shipped as a release artifact.
 

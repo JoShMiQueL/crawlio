@@ -8,3 +8,7 @@ coverage/
 *.log
 playground/
 *.tgz
+# pnpm-lock.yaml is the single canonical lockfile — a Bun-resolved lockfile
+# would drift silently, so it is never committed.
+bun.lock
+bun.lockb

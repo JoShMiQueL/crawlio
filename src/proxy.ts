@@ -1,15 +1,38 @@
 import { ProxyAgent } from "undici";
 import { ConfigError, scrubUrl } from "./errors.js";
+import { isBun } from "./runtime.js";
 import type { ProxyRotation } from "./types.js";
 
 type FetchImpl = typeof globalThis.fetch;
 
 /**
  * Builds the fetch implementation that serves requests through `proxyUrl`.
- * The default wraps the global `fetch` with an undici {@link ProxyAgent};
- * tests inject stubs here so all rotation/health logic runs without network.
+ * The default wraps the global `fetch` with the runtime's proxy mechanism
+ * (see {@link proxyRequestInit}); tests inject stubs here so all
+ * rotation/health logic runs without network.
  */
 export type ProxyFetchFactory = (proxyUrl: string) => FetchImpl;
+
+/**
+ * The one runtime-dependent branch in proxying: extend `init` so the
+ * request exits through `proxyUrl`. Under Bun, `fetch` takes a `proxy`
+ * URL string natively (per-request, credentials in the URL exactly like
+ * the `proxies` config already passes them); under Node there is no such
+ * option, so an undici `dispatcher` does the routing. Neither key is part
+ * of the standard `RequestInit` — both are runtime extensions, hence the
+ * cast. Exported for tests: `bun` is injectable so BOTH lanes are
+ * verifiable on either runtime.
+ */
+export function proxyRequestInit(
+  init: RequestInit | undefined,
+  proxyUrl: string,
+  options: { dispatcher?: ProxyAgent; bun?: boolean } = {},
+): RequestInit {
+  if (options.bun ?? isBun) {
+    return { ...init, proxy: proxyUrl } as RequestInit;
+  }
+  return { ...init, dispatcher: options.dispatcher } as RequestInit;
+}
 
 /**
  * Options for {@link ProxyPool}.
@@ -31,7 +54,11 @@ export interface ProxyPoolOptions {
   proxies: readonly string[];
   /** Rotation strategy — see {@link ProxyRotation}. Default `"per-origin"`. */
   rotation?: ProxyRotation;
-  /** Builds the per-proxy fetch. Default: undici `ProxyAgent` over `fetch`. */
+  /**
+   * Builds the per-proxy fetch. Default: `fetch` + native `proxy` under
+   * Bun, undici `ProxyAgent` dispatcher under Node (see
+   * {@link proxyRequestInit}).
+   */
   fetchFactory?: ProxyFetchFactory;
   /** Monotonic clock for cooldown bookkeeping. Default `performance.now`. */
   now?: () => number;
@@ -95,26 +122,35 @@ interface CloseableFetchFactory extends ProxyFetchFactory {
 }
 
 /**
- * The default {@link ProxyFetchFactory}: `fetch` driven through an undici
- * {@link ProxyAgent}, one agent cached per proxy URL. `dispatcher` is a
- * Node/undici extension outside the `RequestInit` type — hence the cast.
+ * The default {@link ProxyFetchFactory}: `fetch` routed through the
+ * proxy — natively via the `proxy` option under Bun, through an undici
+ * {@link ProxyAgent} (one agent cached per proxy URL) under Node. See
+ * {@link proxyRequestInit} for the shared init seam.
  */
 function defaultFetchFactory(): CloseableFetchFactory {
   const agents = new Map<string, ProxyAgent>();
+  const dispatcherFor = (proxyUrl: string): ProxyAgent => {
+    let agent = agents.get(proxyUrl);
+    if (agent === undefined) {
+      agent = new ProxyAgent(proxyUrl);
+      agents.set(proxyUrl, agent);
+    }
+    return agent;
+  };
   return Object.assign(
     (proxyUrl: string): FetchImpl => {
-      let agent = agents.get(proxyUrl);
-      if (agent === undefined) {
-        agent = new ProxyAgent(proxyUrl);
-        agents.set(proxyUrl, agent);
-      }
+      // Resolve the runtime once per binding: under Bun no `ProxyAgent`
+      // is ever allocated — the native `proxy` option owns the routing
+      // and its sockets.
+      const dispatcher = isBun ? undefined : dispatcherFor(proxyUrl);
       return ((input: Parameters<FetchImpl>[0], init?: RequestInit) =>
-        fetch(input, { ...init, dispatcher: agent } as RequestInit)) as FetchImpl;
+        fetch(input, proxyRequestInit(init, proxyUrl, { dispatcher }))) as FetchImpl;
     },
     {
       close: async (): Promise<void> => {
         // Clear first: a pool still used after close() recreates fresh
-        // agents lazily rather than re-serving closed ones.
+        // agents lazily rather than re-serving closed ones. (Under Bun
+        // the map stays empty — native `proxy` holds no dispatchers.)
         const cached = [...agents.values()];
         agents.clear();
         await Promise.all(cached.map((agent) => agent.close()));
@@ -286,7 +322,8 @@ export class ProxyPool {
 
   /**
    * Close every dispatcher the pool created (one undici `ProxyAgent` per
-   * proxy URL served so far). With a custom
+   * proxy URL served so far — none under Bun, where routing is native).
+   * With a custom
    * {@link ProxyPoolOptions.fetchFactory} this is a no-op — the factory owns
    * its own resources. The pool stays usable afterwards: agents are
    * recreated lazily on the next request.

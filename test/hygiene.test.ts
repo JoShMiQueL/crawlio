@@ -38,7 +38,9 @@ describe("test source hygiene", () => {
     // scrubUrl() helper that is deliberately not part of the public API,
     // src/cli-args.js holds the CLI's pure helpers (the CLI is a bin entry,
     // not library surface), src/mcp-*.js are the `crawlio-mcp` binary's
-    // layers (likewise a bin entry, not library surface), and
+    // layers (likewise a bin entry, not library surface), src/proxy.js
+    // holds the internal proxyRequestInit seam — the runtime-branched
+    // RequestInit extension that is deliberately not public API — and
     // src/render/*.js are the `crawlio/playwright` and `crawlio/puppeteer`
     // subpath exports — they cannot come through index.js because their
     // peer deps must stay optional.
@@ -47,6 +49,7 @@ describe("test source hygiene", () => {
       "../src/errors.js",
       "../src/mcp-server.js",
       "../src/mcp-tools.js",
+      "../src/proxy.js",
       "../src/render/playwright.js",
       "../src/render/puppeteer.js",
     ]);

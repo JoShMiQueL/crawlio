@@ -1,16 +1,20 @@
+import type { ProxyAgent } from "undici";
 import { describe, expect, it } from "vitest";
 import {
   ConfigError,
   createScraper,
+  FetchError,
   fetchHtml,
   fetchHtmlOnce,
   HttpError,
+  isBun,
   type ProxyFetchFactory,
   ProxyPool,
   type ProxyPoolOptions,
   type ScraperOptions,
   TimeoutError,
 } from "../src/index.js";
+import { proxyRequestInit } from "../src/proxy.js";
 
 type FetchImpl = typeof globalThis.fetch;
 
@@ -304,6 +308,31 @@ describe("proxy config validation", () => {
   });
 });
 
+describe("proxy credential hygiene", () => {
+  it("a dead-proxy transport failure never surfaces the credentialed URL", async () => {
+    // Port 1 refuses connections instantly — a deterministic transport
+    // failure through the REAL proxy machinery (undici's dispatcher on
+    // Node, the native `proxy` option on Bun), no factory stub.
+    // fetchHtmlOnce stores the runtime error verbatim as FetchError.cause,
+    // so this pins that neither lane's error embeds the credentialed proxy
+    // URL anywhere in the chain. Probed on Bun 1.4.0 ("Unable to connect…"
+    // / "getaddrinfo ENOTFOUND <host>" — host only) and undici ("fetch
+    // failed" / "connect ECONNREFUSED <host>:<port>").
+    const error: unknown = await fetchHtmlOnce("http://example.com/", {
+      proxy: "http://s3cret-user:p@ssw0rd@127.0.0.1:1",
+    }).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(FetchError);
+    const messages: string[] = [];
+    for (let current = error; current instanceof Error; current = current.cause) {
+      messages.push(current.message);
+    }
+    for (const message of messages) {
+      expect(message).not.toContain("s3cret-user");
+      expect(message).not.toContain("p@ssw0rd");
+    }
+  });
+});
+
 describe("pool housekeeping", () => {
   it("collapses duplicate proxy URLs into one health record", async () => {
     // Without dedup, `stateByUrl` (last-wins) and `states` (every entry)
@@ -429,6 +458,42 @@ describe("scraper-level proxy behaviour (via __proxyPool seam)", () => {
     await scraper.fetchHtml("https://a.example/3", { robots: false, retries: 0 });
     // a.example stays bound to P1 across calls; b.example binds to P2.
     expect(calls.map((c) => c.proxyUrl)).toEqual([P1, P1, P2, P1]);
+  });
+});
+
+describe("runtime proxy seam (proxyRequestInit)", () => {
+  /** Dispatcher stand-in — a real ProxyAgent is never constructed here. */
+  const dispatcher = { close: async () => {} } as unknown as ProxyAgent;
+
+  it("Node lane attaches the undici dispatcher and no `proxy` key", () => {
+    const init = proxyRequestInit({ headers: { "x-a": "1" } }, P1, {
+      bun: false,
+      dispatcher,
+    }) as Record<string, unknown>;
+    expect(init.dispatcher).toBe(dispatcher);
+    expect("proxy" in init).toBe(false);
+    // Existing init fields survive the extension.
+    expect(init.headers).toEqual({ "x-a": "1" });
+  });
+
+  it("Bun lane attaches the native `proxy` URL string and no dispatcher", () => {
+    const init = proxyRequestInit(undefined, P1, { bun: true, dispatcher }) as Record<
+      string,
+      unknown
+    >;
+    expect(init.proxy).toBe(P1);
+    expect("dispatcher" in init).toBe(false);
+  });
+
+  it("the default lane follows the runtime", () => {
+    const init = proxyRequestInit(undefined, P1, { dispatcher }) as Record<string, unknown>;
+    if (isBun) {
+      expect(init.proxy).toBe(P1);
+      expect("dispatcher" in init).toBe(false);
+    } else {
+      expect(init.dispatcher).toBe(dispatcher);
+      expect("proxy" in init).toBe(false);
+    }
   });
 });
 
