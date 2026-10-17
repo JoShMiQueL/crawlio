@@ -110,7 +110,7 @@ Prefer the terminal? The same toolkit ships as a `crawlio` binary —
 
 Be a good citizen: respect the target site's terms, robots.txt, and rate limits.
 
-## Etiquette
+## Politeness
 
 The defaults are deliberately polite: robots.txt is honored
 (`robots: true` — set `robots: false` to skip it), requests to the same
