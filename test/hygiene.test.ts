@@ -42,7 +42,9 @@ describe("test source hygiene", () => {
     // holds the internal proxyRequestInit seam — the runtime-branched
     // RequestInit extension that is deliberately not public API —
     // src/runtime.js holds the `isBun` dual-runtime seam (likewise
-    // deliberately not public API), and src/render/*.js are the
+    // deliberately not public API), src/robots-parser.js is the internal
+    // RFC 9309 parser exercised directly by its spec-matrix suite, and
+    // src/render/*.js are the
     // `crawlio/playwright` and `crawlio/puppeteer` subpath exports — they
     // cannot come through index.js because their peer deps must stay
     // optional.
@@ -54,6 +56,7 @@ describe("test source hygiene", () => {
       "../src/proxy.js",
       "../src/render/playwright.js",
       "../src/render/puppeteer.js",
+      "../src/robots-parser.js",
       "../src/runtime.js",
     ]);
     const offenders = testSources.flatMap(({ name, text }) =>
