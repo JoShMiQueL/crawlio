@@ -7,7 +7,7 @@
  *   crawlio scrape <url> [--fields 'title=h1;links=a.href@all'] [--render auto|always] [--json]
  *   crawlio map <url> [--limit N]
  *   crawlio crawl <url> [--max-depth N] [--max-pages N]
- *   crawlio search <query> [--provider <name|module>] [--api-key <key>] [--limit N] [--json]
+ *   crawlio search <query> [--provider brave|serper|tavily|module] [--api-key <key>] [--limit N] [--json]
  *   crawlio install [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--dry-run]
  */
 import { spawn } from "node:child_process";
@@ -64,7 +64,9 @@ scrape options:
                          deterministic way to wait for SPA content.
   --wait-ms <N>          Fixed settle milliseconds after navigation/wait-for —
                          the cruder escape hatch; prefer --wait-for.
-  --renderer <module>    Custom render adapter: a module specifier (./x.mjs,
+  --renderer <module>    Custom-adapter escape hatch for --render (the
+                         built-in --engine playwright|puppeteer path covers
+                         the common cases): a module specifier (./x.mjs,
                          /abs/path, package name) exporting a { render }
                          object — as "export default" or a named "renderer"
                          export; an optional close() runs on shutdown.
@@ -83,14 +85,17 @@ crawl options:
   --max-pages N          Hard cap on pages fetched (default 50).
 
 search options:
-  --provider <name|module>   Search provider: a built-in name
-                         (brave|serper|tavily) or a module specifier
-                         (./x.mjs, /abs/path, package name) exporting a
-                         { search } object — as "export default" or a named
-                         "searchProvider"/"provider" export.
+  --provider brave|serper|tavily|module
+                         Search provider: one of the built-in names reads
+                         its key from the matching env var (see --api-key).
                          Default: auto-detect from the API-key env vars —
                          BRAVE_API_KEY → SERPER_API_KEY → TAVILY_API_KEY, in
                          that order; zero set is an error naming all three.
+                         A module specifier (./x.mjs, /abs/path, package
+                         name) exporting a { search } object — as "export
+                         default" or a named "searchProvider"/"provider"
+                         export — also works for a custom provider; see
+                         "Custom providers and renderers" in the README.
   --api-key <key>        Provider API key — overrides the provider's env var
                          (BRAVE_API_KEY / SERPER_API_KEY / TAVILY_API_KEY).
                          Built-in names only; a provider module carries its

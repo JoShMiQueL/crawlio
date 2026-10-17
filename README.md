@@ -194,7 +194,7 @@ the library API.
 crawlio scrape <url> [--fields 'title=h1;links=a.href@all'] [--render auto|always] [--json]
 crawlio map <url> [--limit N]
 crawlio crawl <url> [--max-depth N] [--max-pages N]
-crawlio search <query> [--provider <name|module>] [--api-key <key>] [--limit N] [--json]
+crawlio search <query> [--provider brave|serper|tavily|module] [--api-key <key>] [--limit N] [--json]
 crawlio install [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--dry-run]
 crawlio --help | --version
 ```
@@ -224,23 +224,25 @@ crawlio --help | --version
   puppeteer `--channel` defaults to `"chrome"` — puppeteer-core resolves no
   browser without one — covering both a system Chrome and `crawlio
   install`'s `puppeteer browsers install chrome` download.
-  `--renderer <module>` loads a custom renderer module instead of a
-  built-in engine (mutually exclusive with `--engine`/`--browser`/
-  `--channel`/`--executable-path`/`--wait-for`/`--wait-ms`).
+  `--renderer <module>` is the custom-adapter escape hatch — a module
+  specifier that replaces the built-in engines entirely (mutually
+  exclusive with `--engine`/`--browser`/`--channel`/`--executable-path`/
+  `--wait-for`/`--wait-ms`); see [Custom providers and
+  renderers](#custom-providers-and-renderers).
   `--engine`/`--renderer`/`--browser`/`--channel`/`--executable-path`/
   `--wait-for`/`--wait-ms` all require `--render` and error out without
   it.
 - **`map`/`crawl`** print their JSON result (`--limit`, `--max-depth`,
   `--max-pages` map to the library options).
 - **`search`** queries a search provider and prints the hits (`--limit`
-  caps them). `--provider` takes a built-in name (`brave`, `serper`,
-  `tavily`) or a module specifier for a custom provider (see
-  [Custom providers and renderers](#custom-providers-and-renderers)).
-  Without `--provider` the CLI auto-detects from the API-key env vars —
-  `BRAVE_API_KEY` → `SERPER_API_KEY` → `TAVILY_API_KEY`, in that order;
-  zero set is an error naming all three. `--api-key <key>` overrides the
-  env var for built-in names (rejected for provider modules — they carry
-  their own config).
+  caps them). `--provider` takes a built-in name — `brave`, `serper` or
+  `tavily` — and without it the CLI auto-detects from the API-key env
+  vars: `BRAVE_API_KEY` → `SERPER_API_KEY` → `TAVILY_API_KEY`, in that
+  order; zero set is an error naming all three. `--api-key <key>`
+  overrides the env var for a built-in name. A module specifier also
+  works — see [Custom providers and
+  renderers](#custom-providers-and-renderers) (`--api-key` is rejected
+  there; a provider module carries its own config).
 - **`install`** detects the package manager (`packageManager` manifest
   field → lockfile sniff → npm fallback; npm, pnpm, bun and yarn are
   recognized) and dev-installs `playwright-core` or `puppeteer-core`
@@ -470,8 +472,9 @@ Honest limits:
 
 ## Custom providers and renderers
 
-Every external capability in crawlio is an object seam — injected, never
-bundled. The full inventory:
+The built-in adapters cover the common cases — this section is for custom
+adapters. Every external capability in crawlio is an object seam —
+injected, never bundled. The full inventory:
 
 | Seam | Interface | Where it's injected | Built-in adapters |
 | --- | --- | --- | --- |

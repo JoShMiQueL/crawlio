@@ -438,7 +438,7 @@ export async function resolveSearchProviderFlag(
   const detected = detectSearchProviderFromEnv();
   if (detected === undefined) {
     throw new ConfigError(
-      "`crawlio search` needs a provider — pass `--provider <name|module>` or set one of BRAVE_API_KEY, SERPER_API_KEY, TAVILY_API_KEY",
+      "`crawlio search` needs a provider — pass `--provider brave|serper|tavily` (or a module specifier) or set one of BRAVE_API_KEY, SERPER_API_KEY, TAVILY_API_KEY",
     );
   }
   return detected;
