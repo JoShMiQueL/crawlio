@@ -19,6 +19,8 @@ describe("puppeteerRenderer adapter", () => {
       browserClosed: false,
       lastUserAgent: undefined as string | undefined,
       lastGoto: undefined as { url: string; options?: unknown } | undefined,
+      lastWaitForSelector: undefined as { selector: string; options?: unknown } | undefined,
+      events: [] as string[],
       launchOptions: undefined as unknown,
     };
     const page = {
@@ -26,10 +28,18 @@ describe("puppeteerRenderer adapter", () => {
         state.lastUserAgent = options.userAgent;
       },
       goto: async (url: string, options?: unknown) => {
+        state.events.push("goto");
         state.lastGoto = { url, options };
         return { status: () => 200 };
       },
-      content: async () => html,
+      waitForSelector: async (selector: string, options?: unknown) => {
+        state.events.push(`waitForSelector:${selector}`);
+        state.lastWaitForSelector = { selector, options };
+      },
+      content: async () => {
+        state.events.push("content");
+        return html;
+      },
       url: () => "https://example.com/rendered",
     };
     const browser = {
@@ -143,6 +153,75 @@ describe("puppeteerRenderer adapter", () => {
     expect(() => puppeteerRenderer({ channel: "nightly" })).toThrow(ConfigError);
     // "msedge" is a Playwright channel — the error names it explicitly.
     expect(() => puppeteerRenderer({ channel: "msedge" })).toThrow(/msedge.*Playwright/);
+  });
+
+  it("settles in order: goto → waitForSelector → waitForTimeout → content", async () => {
+    const fake = fakePuppeteerModule();
+    const renderer = puppeteerRenderer({
+      ...withFakeModule(fake),
+      waitForSelector: "#app h1",
+      waitForTimeout: 30,
+    });
+    const started = Date.now();
+    await renderer.render("https://example.com/", { timeout: 9000 });
+    const elapsed = Date.now() - started;
+    expect(fake.state.events).toEqual(["goto", "waitForSelector:#app h1", "content"]);
+    // The selector wait shares the navigation timeout budget; the fixed wait
+    // is a real sleep (puppeteer-core ≥ 24 has no page.waitForTimeout).
+    expect(fake.state.lastWaitForSelector?.options).toMatchObject({ timeout: 9000 });
+    expect(elapsed).toBeGreaterThanOrEqual(20);
+    await renderer.close();
+  });
+
+  it("a per-call waitForSelector wins over the renderer options", async () => {
+    const fake = fakePuppeteerModule();
+    const renderer = puppeteerRenderer({
+      ...withFakeModule(fake),
+      waitForSelector: ".instance",
+    });
+    await renderer.render("https://example.com/", { waitForSelector: ".per-call" });
+    expect(fake.state.events).toEqual(["goto", "waitForSelector:.per-call", "content"]);
+    await renderer.close();
+  });
+
+  it("a per-call waitForTimeout wins over the renderer options (hand-rolled sleep)", async () => {
+    const fake = fakePuppeteerModule();
+    const renderer = puppeteerRenderer({
+      ...withFakeModule(fake),
+      waitForTimeout: 400,
+    });
+    const started = Date.now();
+    await renderer.render("https://example.com/", { waitForTimeout: 10 });
+    const elapsed = Date.now() - started;
+    // The per-call 10ms sleep replaced the configured 400ms — a bound far
+    // under the option proves the override ran, not the default.
+    expect(elapsed).toBeLessThan(300);
+    await renderer.close();
+  });
+
+  it("rejects junk per-call settle options with ConfigError before launching", async () => {
+    const fake = fakePuppeteerModule();
+    const renderer = puppeteerRenderer(withFakeModule(fake));
+    const blank = await renderer
+      .render("https://example.com/", { waitForSelector: "" })
+      .catch((e: unknown) => e);
+    const negative = await renderer
+      .render("https://example.com/", { waitForTimeout: -1 })
+      .catch((e: unknown) => e);
+    const nan = await renderer
+      .render("https://example.com/", { waitForTimeout: Number.NaN })
+      .catch((e: unknown) => e);
+    expect(blank).toBeInstanceOf(ConfigError);
+    expect(negative).toBeInstanceOf(ConfigError);
+    expect(nan).toBeInstanceOf(ConfigError);
+    expect(fake.state.launches).toBe(0);
+    await renderer.close();
+  });
+
+  it("rejects a blank waitForSelector and a junk waitForTimeout at construction", () => {
+    expect(() => puppeteerRenderer({ waitForSelector: "  " })).toThrow(ConfigError);
+    expect(() => puppeteerRenderer({ waitForTimeout: -1 })).toThrow(ConfigError);
+    expect(() => puppeteerRenderer({ waitForTimeout: Number.NaN })).toThrow(ConfigError);
   });
 
   it("passes a valid channel through to launch", async () => {

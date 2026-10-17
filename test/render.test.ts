@@ -334,14 +334,27 @@ describe("playwrightRenderer adapter", () => {
       browserClosed: false,
       lastContextOptions: undefined as unknown,
       lastGoto: undefined as { url: string; options?: unknown } | undefined,
+      lastWaitForSelector: undefined as { selector: string; options?: unknown } | undefined,
+      events: [] as string[],
       launchOptions: undefined as unknown,
     };
     const page = {
       goto: async (url: string, options?: unknown) => {
+        state.events.push("goto");
         state.lastGoto = { url, options };
         return { status: () => 200 };
       },
-      content: async () => html,
+      waitForSelector: async (selector: string, options?: unknown) => {
+        state.events.push(`waitForSelector:${selector}`);
+        state.lastWaitForSelector = { selector, options };
+      },
+      waitForTimeout: async (ms: number) => {
+        state.events.push(`waitForTimeout:${ms}`);
+      },
+      content: async () => {
+        state.events.push("content");
+        return html;
+      },
       url: () => "https://example.com/rendered",
     };
     const context = {
@@ -451,6 +464,73 @@ describe("playwrightRenderer adapter", () => {
 
   it("rejects an unknown browser name at construction", () => {
     expect(() => playwrightRenderer({ browser: "netscape" as "chromium" })).toThrow(ConfigError);
+  });
+
+  it("settles in order: goto → waitForSelector → waitForTimeout → content", async () => {
+    const fake = fakePlaywrightModule();
+    const renderer = playwrightRenderer({
+      ...withFakeModule(fake),
+      waitForSelector: "#app h1",
+      waitForTimeout: 25,
+    });
+    await renderer.render("https://example.com/", { timeout: 9000 });
+    expect(fake.state.events).toEqual([
+      "goto",
+      "waitForSelector:#app h1",
+      "waitForTimeout:25",
+      "content",
+    ]);
+    // The selector wait shares the navigation timeout budget.
+    expect(fake.state.lastWaitForSelector?.options).toMatchObject({ timeout: 9000 });
+    await renderer.close();
+  });
+
+  it("a per-call waitForSelector/waitForTimeout wins over the renderer options", async () => {
+    const fake = fakePlaywrightModule();
+    const renderer = playwrightRenderer({
+      ...withFakeModule(fake),
+      waitForSelector: ".instance",
+      waitForTimeout: 50,
+    });
+    await renderer.render("https://example.com/", {
+      waitForSelector: ".per-call",
+      waitForTimeout: 5,
+    });
+    expect(fake.state.events).toEqual([
+      "goto",
+      "waitForSelector:.per-call",
+      "waitForTimeout:5",
+      "content",
+    ]);
+    await renderer.close();
+  });
+
+  it("rejects a blank waitForSelector and a junk waitForTimeout at construction", () => {
+    expect(() => playwrightRenderer({ waitForSelector: "   " })).toThrow(ConfigError);
+    expect(() => playwrightRenderer({ waitForTimeout: -1 })).toThrow(ConfigError);
+    expect(() => playwrightRenderer({ waitForTimeout: Number.NaN })).toThrow(ConfigError);
+    expect(() => playwrightRenderer({ waitForTimeout: Number.POSITIVE_INFINITY })).toThrow(
+      ConfigError,
+    );
+  });
+
+  it("rejects junk per-call settle options with ConfigError before launching", async () => {
+    const fake = fakePlaywrightModule();
+    const renderer = playwrightRenderer(withFakeModule(fake));
+    const blank = await renderer
+      .render("https://example.com/", { waitForSelector: "" })
+      .catch((e: unknown) => e);
+    const negative = await renderer
+      .render("https://example.com/", { waitForTimeout: -1 })
+      .catch((e: unknown) => e);
+    const nan = await renderer
+      .render("https://example.com/", { waitForTimeout: Number.NaN })
+      .catch((e: unknown) => e);
+    expect(blank).toBeInstanceOf(ConfigError);
+    expect(negative).toBeInstanceOf(ConfigError);
+    expect(nan).toBeInstanceOf(ConfigError);
+    expect(fake.state.launches).toBe(0);
+    await renderer.close();
   });
 
   it("re-launches after close", async () => {

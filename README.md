@@ -19,6 +19,7 @@ in your own process, not a hosted service.
 | `crawl` — recursive same-site traversal | done |
 | Proxies — pool routing with rotation and ban-aware health checks | done |
 | `render` seam + `isLikelyDynamic` — headless engine injection for JS pages | done |
+| CLI — `crawlio scrape`/`map`/`crawl`/`install` | done |
 | `search` — via external search providers | planned |
 | MCP server — expose the toolkit to agents | planned |
 
@@ -237,8 +238,9 @@ import { createScraper } from "crawlio";
 import { playwrightRenderer } from "crawlio/playwright";
 
 const renderer = playwrightRenderer({
-  channel: "chrome",        // branded channel — or executablePath: "/path/to/browser"
-  waitUntil: "networkidle", // default "load"
+  channel: "chrome",            // branded channel — or executablePath: "/path/to/browser"
+  waitUntil: "networkidle",     // default "load"
+  waitForSelector: "#app h1",   // wait for this after the navigation settles
 });
 const scraper = createScraper({ render: renderer }); // renderMode: "auto" is the default
 
@@ -251,12 +253,49 @@ peer dependency imported lazily on the first render:
 
 - **`crawlio/playwright` — Playwright** (`pnpm add playwright-core`). `browser`
   (`"chromium"` | `"firefox"` | `"webkit"`), `executablePath`, `channel`,
-  `headless`, `waitUntil`, and `timeoutMs` configure it.
+  `headless`, `waitUntil`, `waitForSelector`, `waitForTimeout`, and
+  `timeoutMs` configure it.
 - **`crawlio/puppeteer` — Puppeteer** (`pnpm add puppeteer-core`, `>=24.21`). Same
   shape minus `browser` (Puppeteer is Chrome-only): `executablePath`,
   `channel` (`"chrome"`, `"chrome-beta"`, ...), `headless`, `waitUntil`
   (Puppeteer names: `"networkidle0"` / `"networkidle2"`, not `"networkidle"`),
-  and `timeoutMs`.
+  `waitForSelector`, `waitForTimeout`, and `timeoutMs`.
+
+**Settle options** — how the page is waited out, in composition order:
+
+1. `waitUntil` — the `goto` navigation-settle condition.
+2. `waitForSelector` — after `goto` settles, wait for this selector before
+   reading content. **This is the way to wait for SPA content
+   deterministically.** Each engine applies its own defaults (Playwright:
+   visible; Puppeteer: present in the DOM), bounded by the navigation
+   timeout.
+3. `waitForTimeout` — a fixed settle in milliseconds, applied last. The
+   cruder escape hatch — prefer `waitForSelector` when you know what to wait
+   for.
+
+All three compose: `goto(waitUntil)` → `waitForSelector` → `waitForTimeout`
+→ `content()`. Both are validated at construction (`waitForSelector`
+non-empty, `waitForTimeout` a finite non-negative number — `ConfigError`
+otherwise). They are renderer options, not scraper options — the scraper
+never sets them. They also exist on `RenderCallOptions` so a caller driving
+`renderer.render()` directly can pass them per call (per-call wins over the
+adapter default).
+
+**Browser resolution** — how each adapter finds a browser binary:
+
+- `channel` — a branded, already-installed browser the engine resolves
+  itself: `"chrome"`/`"msedge"` for Playwright, `"chrome"`/`"chrome-beta"`/
+  `"chrome-canary"`/`"chrome-dev"` for Puppeteer. Zero downloads, but the
+  browser must actually be installed.
+- `playwright install` (or `crawlio install`) — Playwright downloads its own
+  browser builds into the `ms-playwright` cache (`%LOCALAPPDATA%\ms-playwright`
+  on Windows); with no `channel`/`executablePath` set, the adapter uses
+  these. WebKit works on Windows — Playwright ships its own build.
+- `executablePath` — an explicit binary path (CI images, unusual locations).
+  Mutually exclusive with `channel`.
+- Puppeteer never downloads on its own — `puppeteer-core` needs `channel`,
+  `executablePath`, or a browser installed via `npx puppeteer browsers
+  install chrome` (what `crawlio install --engine puppeteer` runs).
 
 ```ts
 import { puppeteerRenderer } from "crawlio/puppeteer";
@@ -302,6 +341,57 @@ Honest limits:
   prefer an isolated environment for hostile targets.
 - **Rendering is read-only** — navigate, wait, return HTML. Browser actions
   (click/fill/type) are a non-goal and live in the sibling project.
+
+## CLI
+
+The `crawlio` binary ships with the package (`npx crawlio`, or a global
+`pnpm add -g crawlio`). Zero extra dependencies — it is a thin wrapper over
+the library API.
+
+```
+crawlio scrape <url> [--fields 'title=h1;links=a.href@all'] [--render auto|always] [--json]
+crawlio map <url> [--limit N]
+crawlio crawl <url> [--max-depth N] [--max-pages N]
+crawlio install [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--dry-run]
+crawlio --help | --version
+```
+
+- **`scrape`** fetches and extracts, printing JSON to stdout. `--fields`
+  uses a mini-syntax: `name=selector` (text of first match),
+  `name=selector@attr` or `name=selector.attr` for attributes (the `.attr`
+  shorthand applies to common attributes: `href`, `src`, `content`, ...),
+  and a trailing `@all` for arrays — entries separated by `;`. Defaults to
+  `title=title`. One ambiguity to know: `name`, `title`, `value`, `alt`,
+  `content`, `href`, `src`, ... are all shorthand attributes, so
+  `desc=div.name` reads `div`'s `name` attribute — NOT elements with class
+  `name`. For a class whose tail collides with a shorthand word use the
+  bracket form (`div[class~="name"]`) or a fuller selector (`div.name
+  span`); a bare `.name` (or `.name@all`) keeps the class meaning because a
+  leading-dot tail can't be an attribute. `--render` loads an engine
+  adapter dynamically (`--engine playwright|puppeteer`, defaulting to
+  playwright when installed, else puppeteer) with the CLI's stronger
+  `networkidle`/`networkidle0` settle default; `--wait-for <selector>` and
+  `--wait-ms <N>` map onto the settle options above. `--browser` picks the
+  Playwright engine (`chromium`|`firefox`|`webkit`; rejected under
+  `--engine puppeteer`, which is Chrome-only — use `--channel` or
+  `--executable-path` there instead), `--channel <name>` selects a branded
+  channel the engine resolves (`"chrome"`, `"msedge"`, ... for playwright;
+  `"chrome"`, `"chrome-beta"`, ... for puppeteer), and `--executable-path
+  <path>` an explicit binary (mutually exclusive with `--channel`). Under
+  puppeteer `--channel` defaults to `"chrome"` — puppeteer-core resolves no
+  browser without one — covering both a system Chrome and `crawlio
+  install`'s `puppeteer browsers install chrome` download.
+  `--engine`/`--browser`/`--channel`/`--executable-path`/`--wait-for`/
+  `--wait-ms` all require `--render` and error out without it.
+- **`map`/`crawl`** print their JSON result (`--limit`, `--max-depth`,
+  `--max-pages` map to the library options).
+- **`install`** detects the package manager (`packageManager` manifest
+  field → lockfile sniff → npm fallback) and runs `<pm> add -D
+  playwright-core` (then `npx playwright-core install <browser>`) or
+  `<pm> add -D puppeteer-core` (then `npx puppeteer browsers install
+  chrome`). `--dry-run` prints the plan without running it.
+
+Errors go to stderr with exit code 1.
 
 ## License
 

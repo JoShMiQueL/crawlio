@@ -1,5 +1,5 @@
 import { ConfigError } from "../errors.js";
-import type { RenderedPage, Renderer } from "../render.js";
+import type { RenderCallOptions, RenderedPage, Renderer } from "../render.js";
 
 /** The lazily-imported `puppeteer-core` module — a peer dep, never bundled. */
 type PuppeteerCore = typeof import("puppeteer-core");
@@ -29,6 +29,22 @@ export interface PuppeteerRendererOptions {
    * with long-lived connections.
    */
   waitUntil?: "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
+  /**
+   * Wait for this selector after the `goto` settles (`waitUntil`), before the
+   * page content is read — THE deterministic way to wait for SPA content.
+   * Uses the engine's `waitForSelector` (default: present in the DOM),
+   * bounded by the same timeout as the navigation. A per-call
+   * {@link RenderCallOptions.waitForSelector} wins over this.
+   */
+  waitForSelector?: string;
+  /**
+   * Fixed settle time in milliseconds, applied after
+   * {@link PuppeteerRendererOptions.waitForSelector} (or after the `goto`
+   * when no selector is set) and before the content is read. The cruder
+   * escape hatch — prefer `waitForSelector` when you know what to wait for.
+   * A per-call {@link RenderCallOptions.waitForTimeout} wins over this.
+   */
+  waitForTimeout?: number;
   /**
    * Default navigation timeout in milliseconds. A per-call
    * {@link Renderer.render} `timeout` (the scraper passes its resolved
@@ -109,6 +125,17 @@ export function puppeteerRenderer(options: PuppeteerRendererOptions = {}): Puppe
   if (options.executablePath !== undefined && options.channel !== undefined) {
     throw new ConfigError("`executablePath` and `channel` are mutually exclusive — pick one");
   }
+  if (options.waitForSelector !== undefined && options.waitForSelector.trim() === "") {
+    throw new ConfigError("`waitForSelector` must be a non-empty CSS selector");
+  }
+  if (
+    options.waitForTimeout !== undefined &&
+    (!Number.isFinite(options.waitForTimeout) || options.waitForTimeout < 0)
+  ) {
+    throw new ConfigError(
+      `\`waitForTimeout\` must be a non-negative finite number of milliseconds, got ${JSON.stringify(options.waitForTimeout)}`,
+    );
+  }
   if (options.channel !== undefined && !CHANNELS.has(options.channel)) {
     throw new ConfigError(
       `\`channel\` must be "chrome", "chrome-beta", "chrome-canary" or "chrome-dev", got ${JSON.stringify(options.channel)}` +
@@ -165,6 +192,20 @@ export function puppeteerRenderer(options: PuppeteerRendererOptions = {}): Puppe
 
   return {
     async render(url, call) {
+      // Per-call settle options get the same validation as the constructor —
+      // a blank selector or NaN/negative wait is a ConfigError, not a silent
+      // skip or a raw engine error.
+      if (call?.waitForSelector !== undefined && call.waitForSelector.trim() === "") {
+        throw new ConfigError("`waitForSelector` must be a non-empty CSS selector");
+      }
+      if (
+        call?.waitForTimeout !== undefined &&
+        (!Number.isFinite(call.waitForTimeout) || call.waitForTimeout < 0)
+      ) {
+        throw new ConfigError(
+          `\`waitForTimeout\` must be a non-negative finite number of milliseconds, got ${JSON.stringify(call.waitForTimeout)}`,
+        );
+      }
       if (call?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
       const browser = await launch();
       // A fresh context per render: read-only isolation, no shared profile —
@@ -194,6 +235,21 @@ export function puppeteerRenderer(options: PuppeteerRendererOptions = {}): Puppe
           waitUntil,
           timeout: call?.timeout ?? options.timeoutMs,
         });
+        // Settle order: goto(waitUntil) → waitForSelector → waitForTimeout →
+        // content(). Per-call values win over the renderer's options, same
+        // rule as `timeout`. (puppeteer-core ≥ 24 removed
+        // `page.waitForTimeout`, so the fixed wait is a plain sleep — an
+        // abort still surfaces via the context close on the next call.)
+        const waitForSelector = call?.waitForSelector ?? options.waitForSelector;
+        if (waitForSelector !== undefined) {
+          await page.waitForSelector(waitForSelector, {
+            timeout: call?.timeout ?? options.timeoutMs,
+          });
+        }
+        const waitForTimeout = call?.waitForTimeout ?? options.waitForTimeout;
+        if (waitForTimeout !== undefined && waitForTimeout > 0) {
+          await new Promise((resolve) => setTimeout(resolve, waitForTimeout));
+        }
         const html = await page.content();
         return {
           url: page.url(),

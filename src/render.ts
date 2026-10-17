@@ -25,6 +25,28 @@ export interface RenderCallOptions {
    * should apply it so the browser tells the same story the SDK would.
    */
   userAgent?: string;
+  /**
+   * Wait for this selector after the navigation settles (`waitUntil`) before
+   * the page content is read — the deterministic way to wait for SPA content.
+   *
+   * The SDK's scraper never sets this: settle behaviour is renderer
+   * configuration. It exists so callers driving a {@link Renderer} directly
+   * get the same knobs, and a per-call value wins over the renderer's own
+   * configured `waitForSelector`. Validated like the renderer option — a
+   * blank selector is a `ConfigError`.
+   */
+  waitForSelector?: string;
+  /**
+   * Fixed settle time in milliseconds, applied after
+   * {@link RenderCallOptions.waitForSelector} (or after the navigation when no
+   * selector is set) — the cruder escape hatch; prefer `waitForSelector` when
+   * you know what to wait for.
+   *
+   * The SDK's scraper never sets this either; a per-call value wins over the
+   * renderer's own configured `waitForTimeout`. Validated like the renderer
+   * option — a NaN or negative value is a `ConfigError`.
+   */
+  waitForTimeout?: number;
 }
 
 /** What a {@link Renderer} returns: the final post-JavaScript page state. */
