@@ -14,7 +14,7 @@ import {
   type ScraperOptions,
   TimeoutError,
 } from "../src/index.js";
-import { proxyRequestInit } from "../src/proxy.js";
+import { defaultFetch, proxyRequestInit } from "../src/proxy.js";
 
 type FetchImpl = typeof globalThis.fetch;
 
@@ -495,6 +495,110 @@ describe("runtime proxy seam (proxyRequestInit)", () => {
       expect("proxy" in init).toBe(false);
     }
   });
+
+  it("Bun lane pins `proxy: false` for an UNCONFIGURED request (env-proxy immunity)", () => {
+    const init = proxyRequestInit({ headers: { "x-a": "1" } }, null, { bun: true }) as Record<
+      string,
+      unknown
+    >;
+    expect(init.proxy).toBe(false);
+    expect("dispatcher" in init).toBe(false);
+    expect(init.headers).toEqual({ "x-a": "1" });
+  });
+
+  it("Node lane attaches nothing for an unconfigured request", () => {
+    const init = proxyRequestInit({ headers: { "x-a": "1" } }, null, {
+      bun: false,
+      dispatcher,
+    }) as Record<string, unknown>;
+    expect("proxy" in init).toBe(false);
+    // No dispatcher either — there is no proxy to route through.
+    expect("dispatcher" in init).toBe(false);
+    expect(init.headers).toEqual({ "x-a": "1" });
+  });
+
+  it("defaultFetch resolves globalThis.fetch per call — post-import patching still intercepts", async () => {
+    // Pinning both lanes without network: a stub swapped in AFTER module
+    // load must still serve the call, and only the Bun lane may carry the
+    // `proxy` init key.
+    const inits: Array<RequestInit | undefined> = [];
+    const stub = (async (_input: unknown, init?: RequestInit) => {
+      inits.push(init);
+      return new Response("ok");
+    }) as FetchImpl;
+    const saved = globalThis.fetch;
+    globalThis.fetch = stub;
+    try {
+      const res = await defaultFetch("https://example.com/");
+      expect(res.status).toBe(200);
+    } finally {
+      globalThis.fetch = saved;
+    }
+    expect(inits).toHaveLength(1);
+    const init = inits[0] as Record<string, unknown> | undefined;
+    if (isBun) {
+      expect(init?.proxy).toBe(false);
+    } else {
+      expect(init === undefined || !("proxy" in init)).toBe(true);
+    }
+  });
+
+  // Real behavioural pin — only meaningful on the runtime whose fetch reads
+  // the env vars. Bun.serve provides the loopback target; a dead env proxy
+  // proves the pin: without `proxy: false` the request would CONNECT to
+  // 127.0.0.1:1 and fail.
+  (isBun ? it : it.skip)("defaultFetch ignores HTTP_PROXY/NO_PROXY env vars", async () => {
+    const savedHttp = process.env.HTTP_PROXY;
+    const savedHttpLower = process.env.http_proxy;
+    const savedNoProxy = process.env.NO_PROXY;
+    const savedNoProxyLower = process.env.no_proxy;
+    process.env.HTTP_PROXY = "http://127.0.0.1:1"; // dead proxy
+    process.env.http_proxy = "http://127.0.0.1:1";
+    process.env.NO_PROXY = ""; // no localhost exemption
+    process.env.no_proxy = "";
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: () => new Response("ok"),
+    });
+    try {
+      const res = await defaultFetch(`http://127.0.0.1:${server.port}/`);
+      expect(res.status).toBe(200);
+      // Sanity: the env proxy really would have routed a plain fetch.
+      await expect(fetch(`http://127.0.0.1:${server.port}/`)).rejects.toThrow();
+    } finally {
+      await server.stop(true);
+      if (savedHttp === undefined) delete process.env.HTTP_PROXY;
+      else process.env.HTTP_PROXY = savedHttp;
+      if (savedHttpLower === undefined) delete process.env.http_proxy;
+      else process.env.http_proxy = savedHttpLower;
+      if (savedNoProxy === undefined) delete process.env.NO_PROXY;
+      else process.env.NO_PROXY = savedNoProxy;
+      if (savedNoProxyLower === undefined) delete process.env.no_proxy;
+      else process.env.no_proxy = savedNoProxyLower;
+    }
+  });
+});
+
+describe("Bun.FetchSession ambient declaration", () => {
+  // `Bun.FetchSession` exists only in src/runtime.ts's ambient declaration —
+  // nothing else validates it against the real runtime API. These run on the
+  // Bun lanes (`bun test`, `bun run test`) and skip under Node.
+  (isBun ? it : it.skip)(
+    "is a real constructable session whose proxy binding connects",
+    async () => {
+      expect(typeof Bun.FetchSession).toBe("function");
+      // A dead loopback proxy: if the session honours its `proxy` option the
+      // fetch fails trying to CONNECT through it — a connect attempt, not a
+      // silent direct request.
+      const session = new Bun.FetchSession({ proxy: "http://127.0.0.1:1" });
+      try {
+        await expect(session.fetch("http://127.0.0.1:9/")).rejects.toThrow();
+      } finally {
+        session.close();
+      }
+    },
+  );
 });
 
 describe("fetchHtmlOnce proxy conflict", () => {

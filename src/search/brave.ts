@@ -1,5 +1,6 @@
 import { HttpError, ParseError } from "../errors.js";
 import { fetchHtmlOnce } from "../fetch.js";
+import { defaultFetch } from "../proxy.js";
 import { withRetries } from "../retry.js";
 import type { SearchCallOptions, SearchProvider, SearchResult } from "../search.js";
 import type { FetchHtmlResult } from "../types.js";
@@ -44,7 +45,7 @@ export function braveSearchProvider(options: BraveSearchProviderOptions = {}): S
   const apiKey = resolveApiKey(options.apiKey, "BRAVE_API_KEY", "braveSearchProvider");
   // Each call clones the parsed URL instead of re-parsing the string.
   const endpoint = parseBaseUrl(options.baseUrl ?? BRAVE_DEFAULT_BASE_URL);
-  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const fetchImpl = options.fetch ?? defaultFetch;
 
   return {
     async search(query: string, call: SearchCallOptions = {}): Promise<SearchResult[]> {

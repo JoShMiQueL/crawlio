@@ -19,10 +19,10 @@ import { fetchHtml, scrape } from "../src/index.js";
  * TYPE-LEVEL ASSERTIONS ONLY — the `it` bodies below are runtime no-ops.
  *
  * `expectTypeOf` is a compile-time construct: a mismatch here is a `tsc` error, not a
- * vitest failure. They are enforced by `pnpm typecheck` / `pnpm test:types`
+ * vitest failure. They are enforced by `bun run typecheck` / `bun run test:types`
  * (`tsc --noEmit -p tsconfig.test.json`, which typechecks `src` + `test`); vitest is
  * only run to keep the file in the suite. The runtime-meaningful coverage lives in
- * the other suites — do not read a green `pnpm test` as evidence these pass.
+ * the other suites — do not read a green `bun test` as evidence these pass.
  */
 const spec = {
   title: "h1.product-title",

@@ -136,7 +136,8 @@ describe("puppeteerRenderer adapter", () => {
     } as PuppeteerRendererOptions);
     const err = await renderer.render("https://example.com/").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ConfigError);
-    expect((err as ConfigError).message).toContain("pnpm add puppeteer-core");
+    // PM-agnostic phrasing — the consumer's package manager is unknown.
+    expect((err as ConfigError).message).toContain("npm install puppeteer-core");
   });
 
   it("rejects executablePath and channel together at construction", () => {

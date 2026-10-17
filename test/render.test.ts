@@ -453,7 +453,8 @@ describe("playwrightRenderer adapter", () => {
     } as PlaywrightRendererOptions);
     const err = await renderer.render("https://example.com/").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ConfigError);
-    expect((err as ConfigError).message).toContain("pnpm add playwright-core");
+    // PM-agnostic phrasing — the consumer's package manager is unknown.
+    expect((err as ConfigError).message).toContain("npm install playwright-core");
   });
 
   it("rejects executablePath and channel together at construction", () => {

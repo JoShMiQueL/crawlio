@@ -17,22 +17,52 @@ export type ProxyFetchFactory = (proxyUrl: string) => FetchImpl;
  * The one runtime-dependent branch in proxying: extend `init` so the
  * request exits through `proxyUrl`. Under Bun, `fetch` takes a `proxy`
  * URL string natively (per-request, credentials in the URL exactly like
- * the `proxies` config already passes them); under Node there is no such
- * option, so an undici `dispatcher` does the routing. Neither key is part
- * of the standard `RequestInit` — both are runtime extensions, hence the
- * cast. Exported for tests: `bun` is injectable so BOTH lanes are
- * verifiable on either runtime.
+ * the `proxies` config already passes them) — the default factory prefers
+ * a `Bun.FetchSession` bound at construction (see `defaultFetchFactory`),
+ * but this remains the per-request option for plain `fetch` calls. Under
+ * Node there is no such option, so an undici `dispatcher` does the
+ * routing. Neither key is part of the standard `RequestInit` — both are
+ * runtime extensions, hence the cast. Exported for tests: `bun` is
+ * injectable so BOTH lanes are verifiable on either runtime.
+ *
+ * `proxyUrl: null` is the UNCONFIGURED case — the request has no proxy at
+ * all. That still needs normalizing on the Bun lane: Bun's global `fetch`
+ * honours the `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` environment variables
+ * while undici never reads them, so an ambient proxy would silently route
+ * unconfigured requests on Bun only. `proxy: false` (Bun ≥1.4.3, "ignores
+ * the proxy environment for one request") pins "no proxy configured" to
+ * "no proxy" — the `proxies` option stays the only opt-in channel, which
+ * is the right default for a scraper. `proxy:` isn't an undici
+ * `RequestInit` key, so the Node lane attaches nothing.
  */
 export function proxyRequestInit(
   init: RequestInit | undefined,
-  proxyUrl: string,
+  proxyUrl: string | null,
   options: { dispatcher?: ProxyAgent; bun?: boolean } = {},
 ): RequestInit {
   if (options.bun ?? isBun) {
-    return { ...init, proxy: proxyUrl } as RequestInit;
+    return { ...init, proxy: proxyUrl ?? false } as RequestInit;
   }
+  if (proxyUrl === null) return { ...init };
   return { ...init, dispatcher: options.dispatcher } as RequestInit;
 }
+
+/**
+ * The fetch every UNCONFIGURED request falls back to — the single
+ * normalization point all default-fetch consumers (page fetches,
+ * robots.txt probes, search providers, the sitemap probe) share, so they
+ * all inherit the env-proxy pin described on {@link proxyRequestInit}.
+ *
+ * Deliberately a wrapper on BOTH lanes: resolving `fetch` per call (not
+ * capturing `globalThis.fetch` at module load) keeps post-import
+ * replacements working — msw-style interception, `vi.stubGlobal`, and
+ * plain `globalThis.fetch = stub` all still intercept, on Node and Bun
+ * alike. On the Node lane the init passes through untouched (undici never
+ * reads the proxy env vars); `proxy:` is a Bun-only `RequestInit` key and
+ * is attached only there.
+ */
+export const defaultFetch: FetchImpl = ((input: Parameters<FetchImpl>[0], init?: RequestInit) =>
+  isBun ? fetch(input, proxyRequestInit(init, null)) : fetch(input, init)) as FetchImpl;
 
 /**
  * Options for {@link ProxyPool}.
@@ -55,9 +85,8 @@ export interface ProxyPoolOptions {
   /** Rotation strategy — see {@link ProxyRotation}. Default `"per-origin"`. */
   rotation?: ProxyRotation;
   /**
-   * Builds the per-proxy fetch. Default: `fetch` + native `proxy` under
-   * Bun, undici `ProxyAgent` dispatcher under Node (see
-   * {@link proxyRequestInit}).
+   * Builds the per-proxy fetch. Default: a `Bun.FetchSession` per proxy
+   * URL under Bun, undici `ProxyAgent` dispatcher under Node.
    */
   fetchFactory?: ProxyFetchFactory;
   /** Monotonic clock for cooldown bookkeeping. Default `performance.now`. */
@@ -122,13 +151,14 @@ interface CloseableFetchFactory extends ProxyFetchFactory {
 }
 
 /**
- * The default {@link ProxyFetchFactory}: `fetch` routed through the
- * proxy — natively via the `proxy` option under Bun, through an undici
- * {@link ProxyAgent} (one agent cached per proxy URL) under Node. See
- * {@link proxyRequestInit} for the shared init seam.
+ * The default {@link ProxyFetchFactory}: one pooled, closeable client per
+ * proxy URL on each runtime — `Bun.FetchSession` (proxy bound at
+ * construction, its own keep-alive/TLS pool) under Bun, undici
+ * {@link ProxyAgent} (via {@link proxyRequestInit}) under Node.
  */
 function defaultFetchFactory(): CloseableFetchFactory {
   const agents = new Map<string, ProxyAgent>();
+  const sessions = new Map<string, Bun.FetchSession>();
   const dispatcherFor = (proxyUrl: string): ProxyAgent => {
     let agent = agents.get(proxyUrl);
     if (agent === undefined) {
@@ -137,23 +167,44 @@ function defaultFetchFactory(): CloseableFetchFactory {
     }
     return agent;
   };
+  const sessionFor = (proxyUrl: string): Bun.FetchSession => {
+    let session = sessions.get(proxyUrl);
+    if (session === undefined) {
+      session = new Bun.FetchSession({ proxy: proxyUrl });
+      sessions.set(proxyUrl, session);
+    }
+    return session;
+  };
   return Object.assign(
     (proxyUrl: string): FetchImpl => {
-      // Resolve the runtime once per binding: under Bun no `ProxyAgent`
-      // is ever allocated — the native `proxy` option owns the routing
-      // and its sockets.
-      const dispatcher = isBun ? undefined : dispatcherFor(proxyUrl);
+      // Under Bun no `ProxyAgent` is ever allocated — the FetchSession
+      // owns routing and its sockets, so `proxyRequestInit` is not needed.
+      if (isBun) {
+        const session = sessionFor(proxyUrl);
+        return ((input: Parameters<FetchImpl>[0], init?: RequestInit) =>
+          session.fetch(input, init)) as FetchImpl;
+      }
+      const dispatcher = dispatcherFor(proxyUrl);
       return ((input: Parameters<FetchImpl>[0], init?: RequestInit) =>
         fetch(input, proxyRequestInit(init, proxyUrl, { dispatcher }))) as FetchImpl;
     },
     {
       close: async (): Promise<void> => {
         // Clear first: a pool still used after close() recreates fresh
-        // agents lazily rather than re-serving closed ones. (Under Bun
-        // the map stays empty — native `proxy` holds no dispatchers.)
-        const cached = [...agents.values()];
+        // agents/sessions lazily rather than re-serving closed ones.
+        const cachedAgents = [...agents.values()];
+        const cachedSessions = [...sessions.values()];
         agents.clear();
-        await Promise.all(cached.map((agent) => agent.close()));
+        sessions.clear();
+        // `allSettled`, not `all`: a throwing `session.close()` must not
+        // skip the undici agents' cleanup, and the ambient decl types it
+        // `void` but a real thenable would float an unhandled rejection —
+        // wrapping in an async arrow awaits a promise return AND converts
+        // a sync throw into a settled rejection.
+        await Promise.allSettled([
+          ...cachedSessions.map(async (session) => session.close()),
+          ...cachedAgents.map((agent) => agent.close()),
+        ]);
       },
     },
   );
@@ -321,16 +372,21 @@ export class ProxyPool {
   }
 
   /**
-   * Close every dispatcher the pool created (one undici `ProxyAgent` per
-   * proxy URL served so far — none under Bun, where routing is native).
+   * Close every pooled client the pool created (one undici `ProxyAgent` or
+   * `Bun.FetchSession` per proxy URL served so far).
    * With a custom
    * {@link ProxyPoolOptions.fetchFactory} this is a no-op — the factory owns
    * its own resources. The pool stays usable afterwards: agents are
    * recreated lazily on the next request.
    *
-   * Coverage is partial in v1: `createScraper` exposes no disposal hook and
-   * the stateless pools built per call inside `fetchHtmlOnce` are
-   * unreachable, so both rely on undici's idle-timeout cleanup. Direct
+   * Coverage is partial in v1: per-call pools (the stateless ones built
+   * inside `fetchHtmlOnce`/`fetchHtmlImpl`/`map`) are closed when their
+   * call settles, but `createScraper` exposes no disposal hook, so an
+   * instance-level pool relies on the runtime's own idle cleanup —
+   * undici's idle timeout under Node. Under Bun a dropped
+   * `Bun.FetchSession` holds only unref'd keep-alive sockets — verified on
+   * 1.4.3 that they cannot keep the process alive, though Bun may keep
+   * the connection pooled for reuse until its own idle cleanup. Direct
    * `ProxyPool` users should call `close()` when done with the pool.
    */
   async close(): Promise<void> {

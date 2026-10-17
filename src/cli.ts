@@ -158,8 +158,8 @@ interface RenderFlags {
 
 /**
  * Build a renderer for `--render`. The CLI defaults to the strongest
- * navigation-settle state (the user asked for JS execution — give the app a
- * chance to run); `--wait-for`/`--wait-ms` tune it further, and
+ * navigation-settle state (`networkidle`/`networkidle0`) so the app gets a
+ * chance to run; `--wait-for`/`--wait-ms` tune it further, and
  * `--browser`/`--channel`/`--executable-path` pick the browser the engine
  * launches.
  */
@@ -328,7 +328,7 @@ async function main(argv: string[]): Promise<number> {
       const provider = await resolveSearchProviderFlag(values.provider, values["api-key"]);
       // A name resolves through the library's provider registry; its
       // env-key default (plus the `--api-key` override) is what makes
-      // `crawlio search` a near-zero-config command.
+      // `crawlio search` usable without further flags.
       const results = await search(url, {
         provider,
         ...(values["api-key"] === undefined ? {} : { apiKey: values["api-key"] }),

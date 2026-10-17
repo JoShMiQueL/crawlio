@@ -22,25 +22,34 @@ A library, not a hosted service. Non-goals, in order of importance:
 - **TypeScript ^5.9.3** — deliberately *not* TypeScript 7 (too new, ships no JS compiler API).
 - **`tsc` only — no bundler.** No tsdown/tsup/rollup/esbuild. ESM-only output (`"type": "module"`, NodeNext).
 - **Biome ^2.5.15** for lint + format. Biome does not typecheck — `tsc --noEmit` is the typecheck step.
-- **vitest ^5.0.5** for tests. **pnpm** for everything.
+- **vitest ^5.0.5** for tests. **bun** for everything (PM, scripts, CI) — the library itself stays dual-runtime: Node consumers are first-class, so every check must also pass under node.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `pnpm lint` | Biome lint + format check |
-| `pnpm lint:fix` | Biome with `--write` (safe autofix) |
-| `pnpm typecheck` | `tsc --noEmit` + `tsc --noEmit -p tsconfig.test.json` |
-| `pnpm test` | vitest, single run |
-| `pnpm test:types` | `tsc --noEmit -p tsconfig.test.json` (type-only assertions in `test/types.test.ts`) |
-| `pnpm build` | `tsc -p tsconfig.build.json` → `dist/` |
-| `pnpm check` | lint + typecheck + test (run this before reporting done) |
-| `pnpm check:pack` | publint + arethetypeswrong on the packed tarball |
+| `bun install` | install deps (`bun.lock` is the canonical lockfile) |
+| `bun run lint` | Biome lint + format check |
+| `bun run lint:fix` | Biome with `--write` (safe autofix) |
+| `bun run typecheck` | `tsc --noEmit` + `tsc --noEmit -p tsconfig.test.json` |
+| `bun test` | bun:test — Bun's own runner (NOT vitest); the CI bun-lane suite |
+| `bun run test` | vitest, single run — the `vitest` .bin shim executes it under node, so this is the SAME lane as `npm run test` |
+| `bun run test:types` | `tsc --noEmit -p tsconfig.test.json` (type-only assertions in `test/types.test.ts`) |
+| `bun run build` | `tsc -p tsconfig.build.json` → `dist/` |
+| `bun run check` | lint + typecheck + test (run this before reporting done) |
+| `bun run check:pack` | publint + arethetypeswrong on the packed tarball |
+| `bunx <cmd>` | one-off binaries (`bunx attw --pack .`, …) — do not install |
+
+Verifying the **node lane** locally: run the same steps through npm/npx —
+`npm run lint`, `npm run typecheck`, `npx vitest run`. `npm run`/`npx`
+spawn the `node_modules/.bin` shims with their `node` shebang, which is
+exactly what CI's node lanes rely on (`bun run`/`bunx` would execute them
+under Bun instead).
 
 ## Project structure
 
 - `src/` — library source. Compiled to `dist/` by `tsc` (`rootDir: ./src`). Public surface re-exported from `src/index.ts`.
-- `test/` — vitest specs + `test/fixtures.ts` (loader). Not in the `tsconfig.json` project, but typechecked by `tsconfig.test.json`. `test/fixtures/` holds recorded HTML; `test/types.test.ts` holds compile-time-only (`expectTypeOf`) assertions enforced by `pnpm typecheck`, not by `pnpm test`.
+- `test/` — vitest specs + `test/fixtures.ts` (loader). Not in the `tsconfig.json` project, but typechecked by `tsconfig.test.json`. `test/fixtures/` holds recorded HTML; `test/types.test.ts` holds compile-time-only (`expectTypeOf`) assertions enforced by `bun run typecheck`, not by `bun test`.
 - `tsconfig.json` (base, `src` only) / `tsconfig.test.json` (`src` + `test`, `noEmit`) / `tsconfig.build.json` (build-only; excludes `dist`, `node_modules`, `src/**/*.test.ts`).
 
 ## Hard rules for agents

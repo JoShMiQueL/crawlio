@@ -1,6 +1,6 @@
 /**
- * `bun build --compile` for both bins — run via `pnpm build:bin` (Bun
- * required; `bun` executes this file directly, so no tsc/`pnpm build`
+ * `bun build --compile` for both bins — run via `bun run build:bin` (Bun
+ * required; `bun` executes this file directly, so no tsc/`build`
  * step is needed — the TS sources compile straight into the binaries).
  *
  *   dist-bin/crawlio      — the `crawlio` CLI
@@ -42,6 +42,10 @@ for (const [entrypoint, name] of builds) {
   }
   // `result.outputs[].size` is the JS bundle — the compiled exe (the
   // bundle + the Bun runtime) is what lands on disk, so stat that.
+  //
+  // `compile.bytecode` was evaluated (Bun 1.4.3): the exe grew ~7.5 MiB
+  // and `--version` startup was ~20 ms SLOWER — the embedded app bundle is
+  // small, so precompiled bytecode buys nothing here.
   const exe = result.outputs[0]?.path ?? `${outdir}/${name}`;
   const mib = statSync(exe).size / 1024 / 1024;
   console.log(`${exe} (${mib.toFixed(1)} MiB)`);

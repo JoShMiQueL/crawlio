@@ -1,7 +1,7 @@
 # Project context navigation
 
 crawlio: a simple typed web-scraping SDK for static HTML — TypeScript 5.9, `tsc`-only
-build (no bundler), ESM-only, Biome, vitest, pnpm. Source in `src/`, tests in `test/`.
+build (no bundler), ESM-only, Biome, vitest, bun toolchain. Source in `src/`, tests in `test/`.
 The `src/` module map is complete for the static-HTML core: `fetch.ts` (Node
 `fetch` + timeout/UA defaults), `scraper.ts` (retry policy, robots.txt,
 `scrape`/`scrapeAll`/`scrapeMany`/`createScraper`), `robots.ts`, `stealth.ts`

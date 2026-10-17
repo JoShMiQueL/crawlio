@@ -104,8 +104,8 @@ async function serveStdio(): Promise<void> {
 async function serveHttp(host: string, port: number): Promise<void> {
   const tools = createCrawlioTools();
   if (isBun) {
-    // Bun.serve wins here — the native fetch-style server, no node:http
-    // shim. Same loopback default, same stateless per-request semantics;
+    // Bun.serve is the native fetch-style server — no node:http shim.
+    // Same loopback default, same stateless per-request semantics;
     // `stop(true)` is the closeAllConnections equivalent for SSE streams.
     const fetch = await createCrawlioMcpFetchHandler(tools, logError);
     const server = Bun.serve({ port, hostname: host, fetch });

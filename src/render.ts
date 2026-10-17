@@ -39,7 +39,7 @@ export interface RenderCallOptions {
   /**
    * Fixed settle time in milliseconds, applied after
    * {@link RenderCallOptions.waitForSelector} (or after the navigation when no
-   * selector is set) — the cruder escape hatch; prefer `waitForSelector` when
+   * selector is set) — a coarser fallback; prefer `waitForSelector` when
    * you know what to wait for.
    *
    * The SDK's scraper never sets this either; a per-call value wins over the
