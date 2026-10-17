@@ -1,4 +1,5 @@
-import { ProxyAgent } from "undici";
+import { createRequire } from "node:module";
+import type { ProxyAgent } from "undici";
 import { ConfigError, scrubUrl } from "./errors.js";
 import { isBun } from "./runtime.js";
 import type { ProxyRotation } from "./types.js";
@@ -159,10 +160,16 @@ interface CloseableFetchFactory extends ProxyFetchFactory {
 function defaultFetchFactory(): CloseableFetchFactory {
   const agents = new Map<string, ProxyAgent>();
   const sessions = new Map<string, Bun.FetchSession>();
+  let require: NodeRequire | undefined;
   const dispatcherFor = (proxyUrl: string): ProxyAgent => {
     let agent = agents.get(proxyUrl);
     if (agent === undefined) {
-      agent = new ProxyAgent(proxyUrl);
+      // Lazy require: only the Node lane reaches this — under Bun it is never
+      // invoked, so undici is neither loaded nor bundled (build-bin also
+      // marks it external).
+      require ??= createRequire(import.meta.url);
+      const { ProxyAgent: Agent } = require("undici") as typeof import("undici");
+      agent = new Agent(proxyUrl);
       agents.set(proxyUrl, agent);
     }
     return agent;

@@ -17,6 +17,8 @@
  *   peers stay lazy `import()`s resolved at runtime; bundling them would
  *   bloat the binary and break their own internal file loading. The MCP
  *   SDK and zod DO embed — the crawlio-mcp binary must be self-contained.
+ * - `--external undici` — the binaries run under Bun, where proxy routing
+ *   uses `Bun.FetchSession` and the undici path is unreachable.
  */
 import { mkdirSync, statSync } from "node:fs";
 import pkg from "../package.json" with { type: "json" };
@@ -33,7 +35,7 @@ for (const [entrypoint, name] of builds) {
   const result = await Bun.build({
     entrypoints: [entrypoint],
     compile: { outfile: `${outdir}/${name}` },
-    external: ["playwright-core", "puppeteer-core"],
+    external: ["playwright-core", "puppeteer-core", "undici"],
     define: { "process.env.CRAWLIO_VERSION": JSON.stringify(pkg.version) },
   });
   if (!result.success) {
