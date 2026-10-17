@@ -286,16 +286,40 @@ Three ways to serve the same tool layer:
 stays clean for the JSON-RPC channel). `--port`/`--host` configure the
 HTTP listener only and are rejected under `--transport stdio`.
 
-Claude Desktop config (`claude_desktop_config.json`) — stdio:
+`mcpServers` client config — stdio. `env` is THE configuration channel
+for the bin: `crawlio-mcp` reads no config files, so renderer vars
+(`CRAWLIO_*`) and provider API keys all ride on the `env` the client
+spawns it with:
 
 ```json
-{ "mcpServers": { "crawlio": { "command": "crawlio-mcp" } } }
+{
+  "mcpServers": {
+    "crawlio": {
+      "command": "crawlio-mcp",
+      "env": {
+        "CRAWLIO_ENGINE": "playwright",
+        "CRAWLIO_BROWSER": "chromium",
+        "BRAVE_API_KEY": "..."
+      }
+    }
+  }
+}
 ```
 
 (or `"command": "npx", "args": ["-y", "-p", "crawlio", "crawlio-mcp"]` to
 run it without a global install — the `crawlio-mcp` bin lives inside the
-`crawlio` package). For an HTTP client, start `crawlio-mcp --transport
-http` yourself and point the client at the URL:
+`crawlio` package.)
+
+Where that `mcpServers` block lives per client:
+
+| Client | Config file |
+| --- | --- |
+| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` (Windows) / `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) |
+| Cursor | `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project) |
+| VS Code Copilot | `.vscode/mcp.json` or `mcp.servers` in user settings — the top-level key is `"servers"`, not `"mcpServers"` |
+
+For an HTTP client, start `crawlio-mcp --transport http` yourself and
+point the client at the URL:
 
 ```json
 { "mcpServers": { "crawlio": { "type": "http", "url": "http://127.0.0.1:3000/mcp" } } }
@@ -306,8 +330,7 @@ URL.) `--host` defaults to `127.0.0.1` — loopback only, because a scraper
 bound to every interface would be a security smell. `--host 0.0.0.0` is
 the explicit opt-out for LAN/remote access; do it only on a network you
 trust — the HTTP endpoint has no authentication, so anyone who can reach
-the port can drive the tools. Credentials stay env-only — provider API keys come from the
-environment, never from tool arguments.
+the port can drive the tools.
 
 Tools — thin wrappers over the library calls, so robots.txt, per-origin
 serialization, retries, and stealth flow through exactly as elsewhere:
@@ -318,6 +341,28 @@ serialization, retries, and stealth flow through exactly as elsewhere:
 | `map` | `url`, `limit?` | `{ urls, source }` |
 | `crawl` | `url`, `maxDepth?`, `maxPages?` | `{ pages, visited, skipped }` |
 | `search` | `query`, `provider?`, `limit?` | `SearchResult[]` |
+
+A `scrape` call and what the agent gets back — every tool returns its
+result serialized as JSON text inside a `content` envelope:
+
+```json
+{
+  "name": "scrape",
+  "arguments": {
+    "url": "https://example.com",
+    "fields": { "title": "h1", "author": { "selector": "meta[name=author]", "attr": "content" } }
+  }
+}
+```
+
+```json
+{ "content": [{ "type": "text", "text": "{\"title\":\"Example Domain\"}" }] }
+```
+
+Failures return `{ "isError": true, "content": [...] }` carrying the
+error message — and unknown or misspelled arguments are rejected outright
+(strict schemas), so a typo surfaces as an error instead of a silent
+default.
 
 `fields` is a JSON object matching `FieldSpecRecord` — a selector string or
 `{ "selector", "attr"?, "all"? }` per entry (`transform` is a function and
