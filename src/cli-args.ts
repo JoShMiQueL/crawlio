@@ -1,9 +1,10 @@
 /**
- * Pure helpers for the `crawlio` CLI (`src/cli.ts`): the `--fields`
- * mini-syntax, numeric flag parsing, flag/command routing, adapter loading,
- * package-manager detection and the `install` command plan. Everything here
- * is free of process I/O (except {@link detectPackageManager}, which only
- * reads the target directory, the `load*Adapter` importers, and
+ * Pure helpers for the `crawlio` CLI (`src/cli.ts`) and the `crawlio-mcp`
+ * bin (`src/mcp.ts`): the `--fields` mini-syntax, numeric flag parsing,
+ * flag/command routing, adapter loading, package-manager detection, the
+ * `install` command plan and the `crawlio-mcp` transport flags. Everything
+ * here is free of process I/O (except {@link detectPackageManager}, which
+ * only reads the target directory, the `load*Adapter` importers, and
  * {@link detectEngineModule}'s peer-dep probes) so it is unit-testable
  * without spawning a browser or a package manager.
  */
@@ -11,6 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { parseArgs } from "node:util";
 import { ConfigError } from "./errors.js";
 import type { Renderer, RenderMode } from "./render.js";
 import type { SearchProvider, SearchProviderName } from "./search.js";
@@ -128,6 +130,91 @@ export function parseCount(value: string | undefined, flag: string): number | un
     );
   }
   return Number(digits);
+}
+
+/**
+ * The `crawlio-mcp` bin's parsed flag surface — see
+ * {@link parseMcpBinArgs}.
+ */
+export interface McpBinArgs {
+  /** The transport to serve: stdio (the Claude-Desktop default) or HTTP. */
+  transport: "stdio" | "http";
+  /** Bind address for `--transport http` — loopback by default. */
+  host: string;
+  /** Port for `--transport http`. */
+  port: number;
+  /** `--help`/`-h` was passed — print usage, do not start a server. */
+  help: boolean;
+}
+
+/**
+ * Parse the `crawlio-mcp` argv:
+ *
+ *   crawlio-mcp [--transport stdio|http] [--port N] [--host H] [--help]
+ *
+ * Defaults: `--transport stdio`, `--host 127.0.0.1`, `--port 3000`. The
+ * host default is loopback on purpose — a scraper MCP server bound to
+ * `0.0.0.0` out of the box would expose the toolkit to the LAN; `--host
+ * 0.0.0.0` is the explicit opt-out. `--port`/`--host` configure the HTTP
+ * listener only — passed with the default stdio transport they would be
+ * silently ignored, so fail loudly (the same treatment
+ * {@link rejectSearchOnlyFlags} gives misplaced flags). Positional
+ * arguments are rejected the same way; `--help` short-circuits before any
+ * validation so `crawlio-mcp --help --port abc` still prints usage.
+ */
+export function parseMcpBinArgs(argv: string[]): McpBinArgs {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: {
+      help: { type: "boolean", short: "h", default: false },
+      transport: { type: "string" },
+      port: { type: "string" },
+      host: { type: "string" },
+    },
+  });
+  if (values.help) {
+    return { transport: "stdio", host: "127.0.0.1", port: 3000, help: true };
+  }
+  if (positionals.length > 0) {
+    throw new ConfigError(
+      `\`crawlio-mcp\` takes no positional arguments, got ${JSON.stringify(positionals[0])} — try \`crawlio-mcp --help\``,
+    );
+  }
+  const transport = values.transport ?? "stdio";
+  if (transport !== "stdio" && transport !== "http") {
+    throw new ConfigError(
+      `\`--transport\` must be "stdio" or "http", got ${JSON.stringify(values.transport)}`,
+    );
+  }
+  const port = parseCount(values.port, "--port") ?? 3000;
+  // 0 parses as a valid count but binds an ephemeral port while the
+  // startup log still prints `host:0` — an address nobody can reach.
+  if (port < 1 || port > 65535) {
+    throw new ConfigError(`\`--port\` must be between 1 and 65535, got ${port}`);
+  }
+  const host = values.host ?? "127.0.0.1";
+  // A blank host is the wildcard address to `server.listen` — `--host ""`
+  // would bind every interface, silently defeating the loopback default.
+  if (host.trim() === "") {
+    throw new ConfigError(`\`--host\` must not be blank, got ${JSON.stringify(values.host)}`);
+  }
+  if (transport === "stdio") {
+    const httpOnly = (
+      [
+        ["--port", values.port],
+        ["--host", values.host],
+      ] as Array<[string, string | undefined]>
+    )
+      .filter(([, value]) => value !== undefined)
+      .map(([flag]) => `\`${flag}\``);
+    if (httpOnly.length > 0) {
+      throw new ConfigError(
+        `${httpOnly.join(", ")} ${httpOnly.length === 1 ? "is" : "are"} only valid with \`--transport http\``,
+      );
+    }
+  }
+  return { transport, host, port, help: false };
 }
 
 /**

@@ -260,8 +260,8 @@ Errors go to stderr with exit code 1.
 
 ## MCP server
 
-`crawlio-mcp` exposes the toolkit to MCP clients (Claude Desktop, agents)
-over stdio. It needs the optional peers `@modelcontextprotocol/sdk` and
+`crawlio-mcp` exposes the toolkit to MCP clients (Claude Desktop, agents).
+It needs the optional peers `@modelcontextprotocol/sdk` and
 `zod` (the SDK validates tool arguments through zod — its own peer
 contract marks it required):
 
@@ -274,7 +274,19 @@ zod` through the detected package manager — runtime dependencies, not
 `-D` — so installing the two packages directly yourself is the same
 thing.)
 
-Claude Desktop config (`claude_desktop_config.json`):
+Three ways to serve the same tool layer:
+
+| Transport | How | For |
+| --- | --- | --- |
+| stdio (default) | `crawlio-mcp` | Claude Desktop and other local clients — the default, no flags needed |
+| Streamable HTTP | `crawlio-mcp --transport http [--port N] [--host H]` | Remote/multi-client access — stateless endpoint, no session tracking |
+| Any transport | `crawlio/mcp` programmatic API | Embedding — see [Embedding programmatically](#embedding-programmatically) |
+
+`crawlio-mcp --help` prints the full flag reference (to stderr — stdout
+stays clean for the JSON-RPC channel). `--port`/`--host` configure the
+HTTP listener only and are rejected under `--transport stdio`.
+
+Claude Desktop config (`claude_desktop_config.json`) — stdio:
 
 ```json
 { "mcpServers": { "crawlio": { "command": "crawlio-mcp" } } }
@@ -282,8 +294,20 @@ Claude Desktop config (`claude_desktop_config.json`):
 
 (or `"command": "npx", "args": ["-y", "-p", "crawlio", "crawlio-mcp"]` to
 run it without a global install — the `crawlio-mcp` bin lives inside the
-`crawlio` package). Credentials stay env-only — provider API keys come from
-the environment, never from tool arguments.
+`crawlio` package). For an HTTP client, start `crawlio-mcp --transport
+http` yourself and point the client at the URL:
+
+```json
+{ "mcpServers": { "crawlio": { "type": "http", "url": "http://127.0.0.1:3000/mcp" } } }
+```
+
+(The handler answers on every path; `/mcp` is the conventional client
+URL.) `--host` defaults to `127.0.0.1` — loopback only, because a scraper
+bound to every interface would be a security smell. `--host 0.0.0.0` is
+the explicit opt-out for LAN/remote access; do it only on a network you
+trust — the HTTP endpoint has no authentication, so anyone who can reach
+the port can drive the tools. Credentials stay env-only — provider API keys come from the
+environment, never from tool arguments.
 
 Tools — thin wrappers over the library calls, so robots.txt, per-origin
 serialization, retries, and stealth flow through exactly as elsewhere:
@@ -324,10 +348,12 @@ closed on shutdown.
 ### Embedding programmatically
 
 The same layer the `crawlio-mcp` binary wires onto stdio is importable as
-`crawlio/mcp` — `createCrawlioMcpServer`, `createCrawlioTools`, the
+`crawlio/mcp` — `createCrawlioMcpServer`, `createCrawlioTools`,
+`createCrawlioMcpHttpHandler`, the
 `resolveEnvRenderer`/`resolveMcpSearchProvider`/`parseJsonFields` helpers,
 and their types (`CrawlioMcpServer`, `CrawlioTools`, `CrawlioToolsDeps`,
-`McpToolDefinition`, `McpToolResult`, `ClosableRenderer`):
+`CrawlioMcpHttpHandler`, `McpToolDefinition`, `McpToolResult`,
+`ClosableRenderer`):
 
 ```ts
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -341,22 +367,27 @@ await server.connect(new StdioServerTransport());
 ```
 
 Same server, any transport — over HTTP it's the Streamable HTTP transport
-(the SSE transport is deprecated; stateless mode needs no session
-handling):
+(the SSE transport is deprecated). `crawlio/mcp` ships the bin's exact
+wiring as `createCrawlioMcpHttpHandler(tools, onError?)`: STATELESS
+(`sessionIdGenerator: undefined` — no session tracking; the scraper holds
+no per-session state) and per-request transports, because SDK 1.32's
+stateless transport refuses to serve a second request on the same
+instance:
 
 ```ts
 import { createServer } from "node:http";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { createCrawlioMcpHttpHandler, createCrawlioTools } from "crawlio/mcp";
 
-const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-await server.connect(transport);
-createServer((req, res) => void transport.handleRequest(req, res)).listen(3000);
+const tools = createCrawlioTools();
+const handler = await createCrawlioMcpHttpHandler(tools);
+createServer((req, res) => void handler(req, res)).listen(3000, "127.0.0.1");
 ```
 
-For Fetch-style runtimes (Workers, Deno, Bun) swap in
+For Fetch-style runtimes (Workers, Deno, Bun) the equivalent is
 `WebStandardStreamableHTTPServerTransport` from
-`@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js` — same
-`connect`, `Request`/`Response` in place of `req`/`res`.
+`@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js` — fresh
+transport (and `McpServer`, since a `Protocol` accepts one `connect()` at
+a time) per request, `Request`/`Response` in place of `req`/`res`.
 
 Like `crawlio/playwright` without `playwright-core`, `import "crawlio/mcp"`
 works with the peers absent — the SDK and zod are only `import()`ed inside

@@ -13,6 +13,7 @@
  * installed, and a missing install only fails inside
  * {@link createCrawlioMcpServer}.
  */
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AnySchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -108,41 +109,49 @@ function toolInputSchemas(z: Zod): Record<string, AnySchema> {
   };
 }
 
+/** The lazily-imported peers {@link buildMcpServer} needs. */
+interface McpPeers {
+  McpServerCtor: typeof McpServer;
+  z: Zod;
+}
+
 /**
- * Build the MCP server: the high-level `McpServer`, registering one tool
- * per `tools.definitions` entry — description from the definition,
- * `inputSchema` from {@link toolInputSchemas}. `McpServer` validates
- * `arguments` against the zod shape first; the handlers still run their
- * own validation (the pure layer is also reachable without a protocol, so
- * it cannot rely on zod having run). Any failure surfaces as an `isError`
- * result, never a thrown exception.
- *
- * A missing/unloadable `@modelcontextprotocol/sdk` or `zod` surfaces as a
- * {@link ConfigError} naming the install — the same treatment the engine
- * adapters give a missing `playwright-core`/`puppeteer-core`.
+ * Import the optional peers. A missing/unloadable
+ * `@modelcontextprotocol/sdk` or `zod` surfaces as a {@link ConfigError}
+ * naming the install — the same treatment the engine adapters give a
+ * missing `playwright-core`/`puppeteer-core`.
  */
-export async function createCrawlioMcpServer(
-  deps: CrawlioToolsDeps = {},
-): Promise<CrawlioMcpServer> {
-  let McpServerCtor: typeof McpServer;
-  let z: Zod;
+async function loadMcpPeers(): Promise<McpPeers> {
   try {
     const [serverModule, zodModule] = await Promise.all([
       import("@modelcontextprotocol/sdk/server/mcp.js"),
       import("zod"),
     ]);
-    McpServerCtor = serverModule.McpServer;
-    z = zodModule.z;
+    return { McpServerCtor: serverModule.McpServer, z: zodModule.z };
   } catch (cause) {
     throw new ConfigError(
       "`crawlio-mcp` needs the optional peers `@modelcontextprotocol/sdk` and `zod` — install them with `pnpm add @modelcontextprotocol/sdk zod`",
       { cause },
     );
   }
+}
 
-  const tools = createCrawlioTools(deps);
-  const schemas = toolInputSchemas(z);
-  const server = new McpServerCtor({ name: "crawlio", version: VERSION });
+/**
+ * Build a fresh `McpServer` bound to `tools`: one registered tool per
+ * `tools.definitions` entry — description from the definition,
+ * `inputSchema` from {@link toolInputSchemas}. `McpServer` validates
+ * `arguments` against the zod shape first; the handlers still run their
+ * own validation (the pure layer is also reachable without a protocol, so
+ * it cannot rely on zod having run). Any failure surfaces as an `isError`
+ * result, never a thrown exception.
+ *
+ * Fresh per call: a `Protocol` accepts exactly one `connect()` at a time,
+ * so the stateless HTTP path builds one server per request — all of them
+ * bound to the same shared `tools`.
+ */
+function buildMcpServer(peers: McpPeers, tools: CrawlioTools): McpServer {
+  const schemas = toolInputSchemas(peers.z);
+  const server = new peers.McpServerCtor({ name: "crawlio", version: VERSION });
   for (const def of tools.definitions) {
     const inputSchema = schemas[def.name];
     if (inputSchema === undefined) {
@@ -156,5 +165,88 @@ export async function createCrawlioMcpServer(
       (args: unknown): Promise<CallToolResult> => tools.call(def.name, args),
     );
   }
-  return { server, tools };
+  return server;
+}
+
+/**
+ * Build the MCP server: the high-level `McpServer` with every tool
+ * registered ({@link buildMcpServer}) plus the shared tool layer — the
+ * `crawlio-mcp --transport stdio` wiring, and the stdio/in-memory
+ * embedding path.
+ */
+export async function createCrawlioMcpServer(
+  deps: CrawlioToolsDeps = {},
+): Promise<CrawlioMcpServer> {
+  const peers = await loadMcpPeers();
+  const tools = createCrawlioTools(deps);
+  return { server: buildMcpServer(peers, tools), tools };
+}
+
+/** A `node:http` request handler — what {@link createCrawlioMcpHttpHandler} returns. */
+export type CrawlioMcpHttpHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+
+/**
+ * Build a `node:http` request handler serving MCP over the Streamable
+ * HTTP transport — the `crawlio-mcp --transport http` wiring:
+ *
+ *   createServer((req, res) => void handler(req, res)).listen(port, host)
+ *
+ * STATELESS: `sessionIdGenerator: undefined` — no `Mcp-Session-Id`
+ * header, no session validation. The scraper holds no per-session state,
+ * and sessions would only pin the shared lazy renderer to a session
+ * lifetime, so there is nothing to key a session on.
+ *
+ * SDK 1.32's stateless transport refuses reuse ("Stateless transport
+ * cannot be reused across requests" — reusing it collides JSON-RPC
+ * message ids between clients), so EACH request builds a fresh transport
+ * AND a fresh `McpServer` ({@link buildMcpServer}) bound to the shared
+ * `tools` — the lazy renderer is still resolved once for the whole
+ * listener, not once per request. The handler is path-agnostic (the
+ * transport dispatches on method and headers, not URL); `/mcp` is merely
+ * the conventional client URL. `onError` receives transport/handler
+ * errors — the bin pipes it to stderr.
+ */
+export async function createCrawlioMcpHttpHandler(
+  tools: CrawlioTools,
+  onError: (error: Error) => void = () => undefined,
+): Promise<CrawlioMcpHttpHandler> {
+  const peers = await loadMcpPeers();
+  let StreamableHTTPServerTransportCtor: typeof import("@modelcontextprotocol/sdk/server/streamableHttp.js").StreamableHTTPServerTransport;
+  try {
+    ({ StreamableHTTPServerTransport: StreamableHTTPServerTransportCtor } = await import(
+      "@modelcontextprotocol/sdk/server/streamableHttp.js"
+    ));
+  } catch (cause) {
+    throw new ConfigError(
+      "`crawlio-mcp --transport http` needs the optional peer `@modelcontextprotocol/sdk` — install it with `pnpm add @modelcontextprotocol/sdk zod`",
+      { cause },
+    );
+  }
+
+  return async (req, res) => {
+    try {
+      // Construction lives inside the try too: a throwing transport or
+      // `buildMcpServer` must degrade to a 500 + onError, not an
+      // unhandled rejection taking the whole listener down.
+      const transport = new StreamableHTTPServerTransportCtor({
+        sessionIdGenerator: undefined,
+      });
+      const server = buildMcpServer(peers, tools);
+      server.server.onerror = onError;
+      // Release the per-request server+transport when the response is
+      // done: `close` fires on completion (or an early connection drop),
+      // and `server.close()` closes the transport it is connected to.
+      res.on("close", () => {
+        void server.close().catch(() => undefined);
+      });
+      await server.connect(transport);
+      await transport.handleRequest(req, res);
+    } catch (error) {
+      onError(error instanceof Error ? error : new Error(String(error)));
+      if (!res.headersSent) {
+        res.writeHead(500);
+      }
+      res.end();
+    }
+  };
 }
