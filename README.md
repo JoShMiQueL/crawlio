@@ -21,7 +21,7 @@ in your own process, not a hosted service.
 | `render` seam + `isLikelyDynamic` — headless engine injection for JS pages | done |
 | CLI — `crawlio scrape`/`map`/`crawl`/`search`/`install` | done |
 | `search` — via external search providers | done |
-| MCP server — expose the toolkit to agents | planned |
+| MCP server (`crawlio-mcp`) — expose the toolkit to agents | done |
 
 Non-goals:
 
@@ -252,6 +252,62 @@ crawlio --help | --version
   chrome`. `--dry-run` prints the plan without running it.
 
 Errors go to stderr with exit code 1.
+
+## MCP server
+
+`crawlio-mcp` exposes the toolkit to MCP clients (Claude Desktop, agents)
+over stdio. It needs the optional peer `@modelcontextprotocol/sdk`:
+
+```sh
+pnpm add crawlio @modelcontextprotocol/sdk
+```
+
+Claude Desktop config (`claude_desktop_config.json`):
+
+```json
+{ "mcpServers": { "crawlio": { "command": "crawlio-mcp" } } }
+```
+
+(or `"command": "npx", "args": ["-y", "-p", "crawlio", "crawlio-mcp"]` to
+run it without a global install — the `crawlio-mcp` bin lives inside the
+`crawlio` package). Credentials stay env-only — provider API keys come from
+the environment, never from tool arguments.
+
+Tools — thin wrappers over the library calls, so robots.txt, per-origin
+serialization, retries, and stealth flow through exactly as elsewhere:
+
+| Tool | Arguments | Returns |
+| --- | --- | --- |
+| `scrape` | `url`, `fields?`, `render?` (`"auto"`/`"always"`) | Extracted fields JSON |
+| `map` | `url`, `limit?` | `{ urls, source }` |
+| `crawl` | `url`, `maxDepth?`, `maxPages?` | `{ pages, visited, skipped }` |
+| `search` | `query`, `provider?`, `limit?` | `SearchResult[]` |
+
+`fields` is a JSON object matching `FieldSpecRecord` — a selector string or
+`{ "selector", "attr"?, "all"? }` per entry (`transform` is a function and
+cannot cross JSON, so it is rejected). `provider` takes a built-in name
+(`"brave"`/`"serper"`/`"tavily"` — the key comes from `BRAVE_API_KEY` /
+`SERPER_API_KEY` / `TAVILY_API_KEY`) or a module specifier; omit it to
+autodetect from those env vars, in that order — the CLI's precedence.
+
+Renderer config is env-only, mirroring the CLI's `--render` engine flags:
+
+| Env var | Meaning |
+| --- | --- |
+| `CRAWLIO_ENGINE` | `playwright` or `puppeteer` — the built-in adapter |
+| `CRAWLIO_BROWSER` | Playwright engine: `chromium`, `firefox`, `webkit` |
+| `CRAWLIO_CHANNEL` | Branded channel the engine resolves (`"chrome"`, `"msedge"`, ...) |
+| `CRAWLIO_EXECUTABLE_PATH` | Explicit browser binary (mutually exclusive with `CRAWLIO_CHANNEL`) |
+| `CRAWLIO_RENDERER` | Custom-adapter module specifier — replaces engine resolution entirely |
+
+Set `CRAWLIO_BROWSER`/`CRAWLIO_CHANNEL`/`CRAWLIO_EXECUTABLE_PATH` without
+`CRAWLIO_ENGINE` and the engine autodetects like `--render` without
+`--engine`: playwright when `playwright-core` is installed, else puppeteer.
+
+Without any renderer env, `scrape` never renders and a `render` argument
+errors. With one configured, `render` defaults to `"auto"`; `"always"`
+skips the static fetch. One lazy renderer is shared by all tool calls and
+closed on shutdown.
 
 ## Stealth (opt-in)
 

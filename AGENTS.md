@@ -65,5 +65,6 @@ This project uses a Devin multi-agent system in `.devin/`:
 
 v1 ships a static-HTML core behind `render`/`SearchProvider` seams — `search`
 is done, delegating to external providers (`braveSearchProvider` is the
-reference). A headless engine plugs in later via optional injection
-(peer-dep/dynamic import) — never bundled.
+reference), and so is the MCP server (`crawlio-mcp`, stdio, optional
+`@modelcontextprotocol/sdk` peer). A headless engine plugs in via optional
+injection (peer-dep/dynamic import) — never bundled.

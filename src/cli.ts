@@ -14,6 +14,7 @@ import { spawn } from "node:child_process";
 import { parseArgs } from "node:util";
 import {
   assertEngineName,
+  detectEngineModule,
   detectPackageManager,
   type InstallCommand,
   installCommands,
@@ -123,33 +124,20 @@ function printJson(data: unknown, compact: boolean): void {
   process.stdout.write(`${JSON.stringify(data, compact ? undefined : null, compact ? 0 : 2)}\n`);
 }
 
-/** Whether a peer-dep engine module is importable from this install. */
-async function moduleAvailable(name: string): Promise<boolean> {
-  try {
-    await import(name);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 interface ClosableRenderer extends Renderer {
   close?(): Promise<void>;
 }
 
 /**
  * Resolve which engine `--render` should use: an explicit `--engine` wins,
- * otherwise playwright if `playwright-core` is installed, else puppeteer.
+ * otherwise autodetect ({@link detectEngineModule}) — playwright if
+ * `playwright-core` is installed, else puppeteer.
  */
 async function resolveEngine(engine: string | undefined): Promise<"playwright" | "puppeteer"> {
   if (engine !== undefined) {
     return assertEngineName(engine);
   }
-  if (await moduleAvailable("playwright-core")) return "playwright";
-  if (await moduleAvailable("puppeteer-core")) return "puppeteer";
-  throw new ConfigError(
-    "`--render` needs a browser engine — run `crawlio install` or install `playwright-core` / `puppeteer-core`",
-  );
+  return detectEngineModule("`--render`");
 }
 
 /** The `--render`-scoped flags, grouped for {@link loadRenderer}. */

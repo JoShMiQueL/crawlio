@@ -3,8 +3,9 @@
  * mini-syntax, numeric flag parsing, flag/command routing, adapter loading,
  * package-manager detection and the `install` command plan. Everything here
  * is free of process I/O (except {@link detectPackageManager}, which only
- * reads the target directory, and the `load*Adapter` importers) so it is
- * unit-testable without spawning a browser or a package manager.
+ * reads the target directory, the `load*Adapter` importers, and
+ * {@link detectEngineModule}'s peer-dep probes) so it is unit-testable
+ * without spawning a browser or a package manager.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -279,6 +280,31 @@ export function assertEngineName(engine: string): "playwright" | "puppeteer" {
   return engine;
 }
 
+/** Whether a peer-dep engine module is importable from this install. */
+async function engineModuleAvailable(name: string): Promise<boolean> {
+  try {
+    await import(name);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Autodetect a render engine when none was named: playwright if
+ * `playwright-core` is importable, else puppeteer. This is the fallback the
+ * CLI applies to `--render` without `--engine`, and `crawlio-mcp` applies
+ * to engine-scoped `CRAWLIO_*` vars without `CRAWLIO_ENGINE`. `label`
+ * names the feature in the error (`--render`, `crawlio-mcp`).
+ */
+export async function detectEngineModule(label: string): Promise<"playwright" | "puppeteer"> {
+  if (await engineModuleAvailable("playwright-core")) return "playwright";
+  if (await engineModuleAvailable("puppeteer-core")) return "puppeteer";
+  throw new ConfigError(
+    `${label} needs a browser engine — run \`crawlio install\` or install \`playwright-core\` / \`puppeteer-core\``,
+  );
+}
+
 /**
  * The provider API-key env vars {@link detectSearchProviderFromEnv} checks,
  * in precedence order — the same order the `--help` text documents.
@@ -368,9 +394,15 @@ function pickAdapterExport(mod: Record<string, unknown>, namedExports: readonly 
  * module must export an object with a `search(query, options)` method —
  * `export default` or a named `searchProvider`/`provider` export. Anything
  * else is a {@link ConfigError} naming the expected shape.
+ *
+ * `flag` labels the error messages — the MCP server reuses this loader for
+ * provider module specifiers, where no `--provider` flag exists.
  */
-export async function loadSearchProviderAdapter(specifier: string): Promise<SearchProvider> {
-  const mod = await importAdapterModule(specifier, "--provider");
+export async function loadSearchProviderAdapter(
+  specifier: string,
+  flag = "--provider",
+): Promise<SearchProvider> {
+  const mod = await importAdapterModule(specifier, flag);
   const candidate = pickAdapterExport(mod, ["searchProvider", "provider"]);
   if (
     typeof candidate !== "object" ||
@@ -378,7 +410,7 @@ export async function loadSearchProviderAdapter(specifier: string): Promise<Sear
     typeof (candidate as SearchProvider).search !== "function"
   ) {
     throw new ConfigError(
-      `\`--provider\` module ${JSON.stringify(specifier)} must export a SearchProvider with a \`search(query, options)\` method — as \`export default\` or a named \`searchProvider\`/\`provider\` export`,
+      `\`${flag}\` module ${JSON.stringify(specifier)} must export a SearchProvider with a \`search(query, options)\` method — as \`export default\` or a named \`searchProvider\`/\`provider\` export`,
     );
   }
   return candidate as SearchProvider;
@@ -390,9 +422,15 @@ export async function loadSearchProviderAdapter(specifier: string): Promise<Sear
  * default` or a named `renderer` export; an optional `close()` is honored
  * on shutdown. Anything else is a {@link ConfigError} naming the expected
  * shape.
+ *
+ * `flag` labels the error messages — the MCP server reuses this loader for
+ * `CRAWLIO_RENDERER`, where no `--renderer` flag exists.
  */
-export async function loadRendererAdapter(specifier: string): Promise<Renderer> {
-  const mod = await importAdapterModule(specifier, "--renderer");
+export async function loadRendererAdapter(
+  specifier: string,
+  flag = "--renderer",
+): Promise<Renderer> {
+  const mod = await importAdapterModule(specifier, flag);
   const candidate = pickAdapterExport(mod, ["renderer"]);
   if (
     typeof candidate !== "object" ||
@@ -400,7 +438,7 @@ export async function loadRendererAdapter(specifier: string): Promise<Renderer> 
     typeof (candidate as Renderer).render !== "function"
   ) {
     throw new ConfigError(
-      `\`--renderer\` module ${JSON.stringify(specifier)} must export a Renderer with a \`render(url, options)\` method — as \`export default\` or a named \`renderer\` export`,
+      `\`${flag}\` module ${JSON.stringify(specifier)} must export a Renderer with a \`render(url, options)\` method — as \`export default\` or a named \`renderer\` export`,
     );
   }
   return candidate as Renderer;

@@ -37,12 +37,16 @@ describe("test source hygiene", () => {
     // Sanctioned submodule imports: src/errors.js holds the internal
     // scrubUrl() helper that is deliberately not part of the public API,
     // src/cli-args.js holds the CLI's pure helpers (the CLI is a bin entry,
-    // not library surface), and src/render/*.js are the `crawlio/playwright`
-    // and `crawlio/puppeteer` subpath exports — they cannot come through
-    // index.js because their peer deps must stay optional.
+    // not library surface), src/mcp-*.js are the `crawlio-mcp` binary's
+    // layers (likewise a bin entry, not library surface), and
+    // src/render/*.js are the `crawlio/playwright` and `crawlio/puppeteer`
+    // subpath exports — they cannot come through index.js because their
+    // peer deps must stay optional.
     const allowed = new Set([
       "../src/cli-args.js",
       "../src/errors.js",
+      "../src/mcp-server.js",
+      "../src/mcp-tools.js",
       "../src/render/playwright.js",
       "../src/render/puppeteer.js",
     ]);
