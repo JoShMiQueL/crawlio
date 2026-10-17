@@ -38,14 +38,16 @@ Non-goals:
 ## Install
 
 ```sh
-pnpm add crawlio
+bun add crawlio
 # or
 npm i crawlio
 ```
 
-Requires Node.js >= 22.19. crawlio is dual-runtime — it also runs under
-Bun; `proxy`/`proxies` routing on Bun requires Bun >= 1.4.3
-(`Bun.FetchSession`).
+Requires Node.js >= 22.19 — and runs natively on Bun >= 1.4.3, the
+preferred runtime: proxies use `Bun.FetchSession` per-proxy pools (no
+undici), the MCP HTTP server uses `Bun.serve`, and the repo toolchain
+(install, test, typecheck via `bun check`, compiled binaries via
+`bun build --compile`) is Bun end-to-end.
 
 ## Usage
 

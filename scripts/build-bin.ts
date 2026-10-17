@@ -19,7 +19,7 @@
  *   SDK and zod DO embed — the crawlio-mcp binary must be self-contained.
  */
 import { mkdirSync, statSync } from "node:fs";
-import pkg from "../package.json";
+import pkg from "../package.json" with { type: "json" };
 
 const outdir = "dist-bin";
 mkdirSync(outdir, { recursive: true });
