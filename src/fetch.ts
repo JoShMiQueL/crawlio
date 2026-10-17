@@ -41,7 +41,7 @@ function overlayHeaders(
  * Perform exactly one HTTP request and decode the body.
  *
  * This is deliberately the non-retried, non-robots layer: retries live in
- * `createScraper` (via `p-retry`) and robots gating lives there too. Keeping
+ * `createScraper` (via `withRetries`) and robots gating lives there too. Keeping
  * them out of this function means a single attempt is testable on its own and
  * the retry policy is in exactly one place.
  *

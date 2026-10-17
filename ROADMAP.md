@@ -44,7 +44,7 @@ Ordered by effort:
 
 | Dep | Plan | Effort |
 | --- | --- | --- |
-| `p-limit` / `p-retry` | Hand-roll — tests already exist | easy |
+| ~~`p-limit` / `p-retry`~~ | Done — `src/limit.ts`, `src/retry.ts` | easy |
 | `robots-parser` | Own parser, faithful to Google's spec (allow/disallow, wildcards, longest-match) | medium |
 | `undici` | Node lane only — Bun fetch has native `proxy:` | easy/med |
 | `cheerio` | Extraction seam with two backends — see caveat | hard |
