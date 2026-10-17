@@ -3,6 +3,35 @@
 Simple, typed web scraping for static HTML: fetch a page, parse it, and extract
 typed fields via CSS selectors. Pre-1.0 — the API may still change.
 
+## What is crawlio
+
+A typed, self-hosted Node.js SDK for web data extraction — scrape/crawl/map/search
+over HTTP, with a pluggable renderer for JS-heavy pages. It's a library you run
+in your own process, not a hosted service.
+
+| Capability | Status |
+| --- | --- |
+| scrape — fetch + typed extraction over HTTP | done |
+| Politeness controls — robots.txt, per-origin serialization, delays, concurrency cap | done |
+| Stealth (opt-in) — browser header profiles, cookie jar, referer chain, jitter | done |
+| CAPTCHA solver seam — user-provided `solve` interface | done |
+| `map` — discover all URLs on a site | planned |
+| `crawl` — recursive same-site traversal | planned |
+| Proxies — pluggable per-request routing | planned |
+| `render` seam + `isLikelyDynamic` — headless engine injection for JS pages | planned |
+| `search` — via external search providers | planned |
+| MCP server — expose the toolkit to agents | planned |
+
+Non-goals:
+
+- **No browser actions, ever.** No click/fill/type/navigation flows — the
+  renderer is read-only. Browser automation lives in a separate sibling
+  project.
+- **No own search index** — `search` delegates to external providers.
+- **No managed-challenge guarantees at the HTTP layer** — the solver seam
+  exists, but solving is your solver's job and success is never promised.
+- **Nothing hosted** — no API keys, no cloud component, no account.
+
 ## Install
 
 ```sh

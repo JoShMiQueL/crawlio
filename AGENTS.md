@@ -6,6 +6,17 @@
 HTTP fetch + HTML parsing + CSS-selector field extraction, with types inferred from
 the extraction spec. Pre-1.0 and unpublished.
 
+**Product definition.** A typed, self-hosted Node.js SDK for web data extraction —
+scrape/crawl/map/search over HTTP, with a pluggable renderer for JS-heavy pages.
+A library, not a hosted service. Non-goals, in order of importance:
+
+- **crawlio NEVER performs browser actions.** No click/fill/type/navigation flows —
+  rendering is read-only. Browser automation is a separate sibling project.
+- **No own search index** — `search` delegates to external providers.
+- **No managed-challenge guarantees at the HTTP layer** — the captcha solver is a
+  seam, not a promise.
+- **Nothing hosted** — no API keys, no cloud component.
+
 ## Stack
 
 - **TypeScript ^5.9.3** — deliberately *not* TypeScript 7 (too new, ships no JS compiler API).
