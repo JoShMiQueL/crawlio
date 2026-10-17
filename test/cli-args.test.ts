@@ -8,6 +8,7 @@ import {
   packageManagerFromField,
   parseCount,
   parseFieldsSpec,
+  rejectSearchOnlyFlags,
 } from "../src/cli-args.js";
 import { ConfigError } from "../src/index.js";
 
@@ -92,6 +93,37 @@ describe("parseCount", () => {
     expect(() => parseCount("+5", "--limit")).toThrow(ConfigError);
     // Surrounding whitespace is tolerated.
     expect(parseCount(" 42 ", "--limit")).toBe(42);
+  });
+});
+
+describe("rejectSearchOnlyFlags — --provider/--api-key belong to `crawlio search`", () => {
+  it("rejects either flag on the non-search commands", () => {
+    for (const command of ["scrape", "map", "crawl", "install"]) {
+      expect(() => rejectSearchOnlyFlags({ provider: "brave" }, command)).toThrow(ConfigError);
+      expect(() => rejectSearchOnlyFlags({ "api-key": "key" }, command)).toThrow(ConfigError);
+    }
+  });
+
+  it("names the flags and the offending command", () => {
+    let error: unknown;
+    try {
+      rejectSearchOnlyFlags({ provider: "brave", "api-key": "key" }, "scrape");
+    } catch (err) {
+      error = err;
+    }
+    expect(error).toBeInstanceOf(ConfigError);
+    const message = (error as ConfigError).message;
+    expect(message).toContain("--provider");
+    expect(message).toContain("--api-key");
+    expect(message).toContain("`crawlio search`");
+    expect(message).toContain("`crawlio scrape`");
+  });
+
+  it("accepts calls that set neither flag", () => {
+    expect(() => rejectSearchOnlyFlags({}, "scrape")).not.toThrow();
+    expect(() =>
+      rejectSearchOnlyFlags({ provider: undefined, "api-key": undefined }, "map"),
+    ).not.toThrow();
   });
 });
 

@@ -2,13 +2,22 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   braveSearchProvider,
   ConfigError,
+  crawl,
   FetchError,
+  fetchHtml,
+  fetchHtmlOnce,
   HttpError,
+  map,
   ParseError,
+  SEARCH_PROVIDER_NAMES,
   type SearchProvider,
+  type SearchProviderName,
   type SearchResult,
+  scrape,
   scrapeMany,
   search,
+  serperSearchProvider,
+  tavilySearchProvider,
 } from "../src/index.js";
 
 type FetchImpl = typeof globalThis.fetch;
@@ -19,14 +28,21 @@ const KEY = "test-secret-key";
 
 interface RecordedCall {
   url: string;
+  method: string;
   headers: Headers;
+  body: string | undefined;
 }
 
-/** A fetch mock recording (url, headers) and serving a fixed response. */
+/** A fetch mock recording (url, method, headers, body) and serving a fixed response. */
 function recordingFetch(response: () => Response | Promise<Response>) {
   const calls: RecordedCall[] = [];
   const impl: FetchImpl = (async (input: unknown, init?: RequestInit) => {
-    calls.push({ url: String(input), headers: new Headers(init?.headers) });
+    calls.push({
+      url: String(input),
+      method: init?.method ?? "GET",
+      headers: new Headers(init?.headers),
+      body: typeof init?.body === "string" ? init.body : undefined,
+    });
     return response();
   }) as FetchImpl;
   return { impl, calls };
@@ -36,11 +52,22 @@ function braveBody(results: Array<Record<string, unknown>>): string {
   return JSON.stringify({ web: { results } });
 }
 
-// The env fallback must never be polluted by a developer's real key.
-const savedEnvKey = process.env.BRAVE_API_KEY;
+function serperBody(results: Array<Record<string, unknown>>): string {
+  return JSON.stringify({ organic: results });
+}
+
+function tavilyBody(results: Array<Record<string, unknown>>): string {
+  return JSON.stringify({ results });
+}
+
+// The env fallbacks must never be polluted by a developer's real key.
+const ENV_KEYS = ["BRAVE_API_KEY", "SERPER_API_KEY", "TAVILY_API_KEY"] as const;
+const savedEnvKeys = ENV_KEYS.map((name) => [name, process.env[name]] as const);
 afterEach(() => {
-  if (savedEnvKey === undefined) delete process.env.BRAVE_API_KEY;
-  else process.env.BRAVE_API_KEY = savedEnvKey;
+  for (const [name, value] of savedEnvKeys) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
 });
 
 describe("search seam", () => {
@@ -60,6 +87,36 @@ describe("search seam", () => {
   it("rejects an empty or whitespace-only query", async () => {
     await expect(search("", { provider: stub([]) })).rejects.toBeInstanceOf(ConfigError);
     await expect(search("   \n\t ", { provider: stub([]) })).rejects.toBeInstanceOf(ConfigError);
+  });
+
+  it("reports the empty query even when the provider would demand a key", async () => {
+    // Provider resolution (and its API-key ConfigError) comes AFTER input
+    // validation — a caller bug must name itself, not the missing key.
+    delete process.env.BRAVE_API_KEY;
+    const error = await search("", { provider: "brave" }).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    expect(error).toBeInstanceOf(ConfigError);
+    expect((error as ConfigError).message).toContain("non-empty");
+    expect((error as ConfigError).message).not.toContain("API key");
+  });
+
+  it("reports a bad limit/retries before resolving the provider", async () => {
+    delete process.env.BRAVE_API_KEY;
+    for (const options of [{ limit: -1 }, { retries: -1 }]) {
+      const error = await search("q", { provider: "brave", ...options }).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+      expect(error).toBeInstanceOf(ConfigError);
+      expect((error as ConfigError).message).not.toContain("API key");
+    }
+  });
+
+  it("short-circuits limit: 0 without resolving the provider — no key needed", async () => {
+    delete process.env.BRAVE_API_KEY;
+    expect(await search("q", { provider: "brave", limit: 0 })).toEqual([]);
   });
 
   it("trims the query before handing it to the provider", async () => {
@@ -404,6 +461,439 @@ describe("braveSearchProvider", () => {
 
   it("throws ConfigError at construction on an invalid baseUrl", () => {
     expect(() => braveSearchProvider({ apiKey: KEY, baseUrl: "not a url" })).toThrow(ConfigError);
+  });
+});
+
+describe("serperSearchProvider", () => {
+  function providerWith(impl: FetchImpl) {
+    return serperSearchProvider({
+      apiKey: KEY,
+      baseUrl: "https://search.test/serper",
+      fetch: impl,
+    });
+  }
+
+  it("POSTs the query as JSON with the key in X-API-KEY — never the URL or body", async () => {
+    const { impl, calls } = recordingFetch(
+      () =>
+        new Response(serperBody([{ link: "https://a.example/" }]), {
+          status: 200,
+          headers: JSON_HEADERS,
+        }),
+    );
+    await providerWith(impl).search("hello world", { limit: 3 });
+    expect(calls).toHaveLength(1);
+    const call = calls[0] as RecordedCall;
+    expect(call.method).toBe("POST");
+    expect(call.url).toBe("https://search.test/serper");
+    expect(call.headers.get("x-api-key")).toBe(KEY);
+    expect(call.headers.get("content-type")).toBe("application/json");
+    expect(call.headers.get("accept")).toBe("application/json");
+    expect(call.headers.get("user-agent")).toContain("crawlio/");
+    expect(JSON.parse(call.body ?? "null")).toEqual({ q: "hello world", num: 3 });
+    // The credential must travel in neither the request line nor the payload.
+    expect(call.url).not.toContain(KEY);
+    expect(call.body ?? "").not.toContain(KEY);
+  });
+
+  it("omits num when no limit is given and clamps it to Serper's 1–100 bound", async () => {
+    const { impl, calls } = recordingFetch(
+      () => new Response(serperBody([]), { status: 200, headers: JSON_HEADERS }),
+    );
+    const provider = providerWith(impl);
+    await provider.search("q");
+    expect(JSON.parse(calls[0]?.body ?? "null")).toEqual({ q: "q" });
+    await provider.search("q", { limit: 500 });
+    expect(JSON.parse(calls[1]?.body ?? "null")).toEqual({ q: "q", num: 100 });
+    await provider.search("q", { limit: 0 });
+    expect(JSON.parse(calls[2]?.body ?? "null")).toEqual({ q: "q", num: 1 });
+  });
+
+  it("maps organic entries (link/snippet), tolerating missing fields", async () => {
+    const { impl } = recordingFetch(
+      () =>
+        new Response(
+          serperBody([
+            { link: "https://a.example/", title: "A", snippet: "alpha" },
+            { link: "https://b.example/" },
+            { title: "no link — dropped" },
+          ]),
+          { status: 200, headers: JSON_HEADERS },
+        ),
+    );
+    const results = await providerWith(impl).search("q");
+    expect(results).toEqual([
+      { url: "https://a.example/", title: "A", description: "alpha" },
+      { url: "https://b.example/" },
+    ]);
+  });
+
+  it("returns an empty list when the response has no organic block", async () => {
+    const { impl } = recordingFetch(
+      () =>
+        new Response(JSON.stringify({ answerBox: { answer: "42" } }), {
+          status: 200,
+          headers: JSON_HEADERS,
+        }),
+    );
+    expect(await providerWith(impl).search("q")).toEqual([]);
+  });
+
+  it("surfaces non-2xx as a typed error that never names the key", async () => {
+    const { impl } = recordingFetch(
+      () => new Response(`{"error":"${KEY} is invalid"}`, { status: 401 }),
+    );
+    const error = await providerWith(impl)
+      .search("q")
+      .then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+    expect(error).toBeInstanceOf(HttpError);
+    expect((error as HttpError).status).toBe(401);
+    expect((error as HttpError).message).toContain("API key");
+    expect((error as HttpError).message).not.toContain(KEY);
+    expect((error as HttpError).url ?? "").not.toContain(KEY);
+  });
+
+  it("retries a 429 per the shared policy and then succeeds", async () => {
+    let attempt = 0;
+    const { impl, calls } = recordingFetch(() => {
+      attempt += 1;
+      return attempt === 1
+        ? new Response("slow down", { status: 429 })
+        : new Response(serperBody([{ link: "https://a.example/" }]), {
+            status: 200,
+            headers: JSON_HEADERS,
+          });
+    });
+    const results = await providerWith(impl).search("q");
+    expect(calls).toHaveLength(2);
+    expect(results).toEqual([{ url: "https://a.example/" }]);
+  });
+
+  it("surfaces malformed JSON as ParseError", async () => {
+    const { impl } = recordingFetch(
+      () => new Response("this is not json <<<", { status: 200, headers: JSON_HEADERS }),
+    );
+    await expect(providerWith(impl).search("q")).rejects.toBeInstanceOf(ParseError);
+  });
+
+  it("falls back to SERPER_API_KEY and an explicit key wins", async () => {
+    process.env.SERPER_API_KEY = "env-key";
+    const { impl, calls } = recordingFetch(
+      () => new Response(serperBody([]), { status: 200, headers: JSON_HEADERS }),
+    );
+    await serperSearchProvider({ baseUrl: "https://search.test/serper", fetch: impl }).search("q");
+    expect(calls[0]?.headers.get("x-api-key")).toBe("env-key");
+    calls.length = 0;
+    await serperSearchProvider({
+      apiKey: "explicit-key",
+      baseUrl: "https://search.test/serper",
+      fetch: impl,
+    }).search("q");
+    expect(calls[0]?.headers.get("x-api-key")).toBe("explicit-key");
+  });
+
+  it("throws ConfigError at construction when no key is available", () => {
+    delete process.env.SERPER_API_KEY;
+    expect(() => serperSearchProvider()).toThrow(ConfigError);
+  });
+
+  it("throws ConfigError at construction on an invalid baseUrl", () => {
+    expect(() => serperSearchProvider({ apiKey: KEY, baseUrl: "not a url" })).toThrow(ConfigError);
+  });
+});
+
+describe("tavilySearchProvider", () => {
+  function providerWith(impl: FetchImpl) {
+    return tavilySearchProvider({
+      apiKey: KEY,
+      baseUrl: "https://search.test/tavily",
+      fetch: impl,
+    });
+  }
+
+  it("POSTs the query as JSON with a Bearer key — never the URL or body", async () => {
+    const { impl, calls } = recordingFetch(
+      () =>
+        new Response(tavilyBody([{ url: "https://a.example/" }]), {
+          status: 200,
+          headers: JSON_HEADERS,
+        }),
+    );
+    await providerWith(impl).search("hello world", { limit: 3 });
+    expect(calls).toHaveLength(1);
+    const call = calls[0] as RecordedCall;
+    expect(call.method).toBe("POST");
+    expect(call.url).toBe("https://search.test/tavily");
+    expect(call.headers.get("authorization")).toBe(`Bearer ${KEY}`);
+    expect(call.headers.get("content-type")).toBe("application/json");
+    expect(call.headers.get("user-agent")).toContain("crawlio/");
+    // Deliberately `query`/`max_results` — NO `api_key` field in the payload.
+    expect(JSON.parse(call.body ?? "null")).toEqual({ query: "hello world", max_results: 3 });
+    expect(call.url).not.toContain(KEY);
+    expect(call.body ?? "").not.toContain(KEY);
+  });
+
+  it("omits max_results when no limit is given and clamps to Tavily's 1–20 bound", async () => {
+    const { impl, calls } = recordingFetch(
+      () => new Response(tavilyBody([]), { status: 200, headers: JSON_HEADERS }),
+    );
+    const provider = providerWith(impl);
+    await provider.search("q");
+    expect(JSON.parse(calls[0]?.body ?? "null")).toEqual({ query: "q" });
+    await provider.search("q", { limit: 500 });
+    expect(JSON.parse(calls[1]?.body ?? "null")).toEqual({ query: "q", max_results: 20 });
+    await provider.search("q", { limit: 0 });
+    expect(JSON.parse(calls[2]?.body ?? "null")).toEqual({ query: "q", max_results: 1 });
+  });
+
+  it("maps results entries (url/content), tolerating missing fields", async () => {
+    const { impl } = recordingFetch(
+      () =>
+        new Response(
+          tavilyBody([
+            { url: "https://a.example/", title: "A", content: "alpha" },
+            { url: "https://b.example/" },
+            { title: "no url — dropped" },
+          ]),
+          { status: 200, headers: JSON_HEADERS },
+        ),
+    );
+    const results = await providerWith(impl).search("q");
+    expect(results).toEqual([
+      { url: "https://a.example/", title: "A", description: "alpha" },
+      { url: "https://b.example/" },
+    ]);
+  });
+
+  it("returns an empty list when the response has no results block", async () => {
+    const { impl } = recordingFetch(
+      () =>
+        new Response(JSON.stringify({ answer: "42" }), {
+          status: 200,
+          headers: JSON_HEADERS,
+        }),
+    );
+    expect(await providerWith(impl).search("q")).toEqual([]);
+  });
+
+  it("surfaces non-2xx as a typed error that never names the key", async () => {
+    const { impl } = recordingFetch(
+      () => new Response(`{"error":"${KEY} is invalid"}`, { status: 403 }),
+    );
+    const error = await providerWith(impl)
+      .search("q")
+      .then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+    expect(error).toBeInstanceOf(HttpError);
+    expect((error as HttpError).status).toBe(403);
+    expect((error as HttpError).message).toContain("API key");
+    expect((error as HttpError).message).not.toContain(KEY);
+    expect((error as HttpError).url ?? "").not.toContain(KEY);
+  });
+
+  it("honors retries: 0 — a retryable status fails after one attempt", async () => {
+    const { impl, calls } = recordingFetch(() => new Response("slow down", { status: 429 }));
+    await expect(providerWith(impl).search("q", { retries: 0 })).rejects.toBeInstanceOf(HttpError);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("surfaces malformed JSON as ParseError", async () => {
+    const { impl } = recordingFetch(
+      () => new Response("this is not json <<<", { status: 200, headers: JSON_HEADERS }),
+    );
+    await expect(providerWith(impl).search("q")).rejects.toBeInstanceOf(ParseError);
+  });
+
+  it("falls back to TAVILY_API_KEY and an explicit key wins", async () => {
+    process.env.TAVILY_API_KEY = "env-key";
+    const { impl, calls } = recordingFetch(
+      () => new Response(tavilyBody([]), { status: 200, headers: JSON_HEADERS }),
+    );
+    await tavilySearchProvider({ baseUrl: "https://search.test/tavily", fetch: impl }).search("q");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer env-key");
+    calls.length = 0;
+    await tavilySearchProvider({
+      apiKey: "explicit-key",
+      baseUrl: "https://search.test/tavily",
+      fetch: impl,
+    }).search("q");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer explicit-key");
+  });
+
+  it("throws ConfigError at construction when no key is available", () => {
+    delete process.env.TAVILY_API_KEY;
+    expect(() => tavilySearchProvider()).toThrow(ConfigError);
+  });
+
+  it("throws ConfigError at construction on an invalid baseUrl", () => {
+    expect(() => tavilySearchProvider({ apiKey: KEY, baseUrl: "not a url" })).toThrow(ConfigError);
+  });
+});
+
+describe("search() provider-name resolution", () => {
+  /** Swap in a recording fetch as globalThis.fetch for one assertion. */
+  async function withGlobalFetch<T>(impl: FetchImpl, run: () => Promise<T>): Promise<T> {
+    const saved = globalThis.fetch;
+    globalThis.fetch = impl;
+    try {
+      return await run();
+    } finally {
+      globalThis.fetch = saved;
+    }
+  }
+
+  it("resolves 'serper' through the registry and forwards apiKey", async () => {
+    const { impl, calls } = recordingFetch(
+      () =>
+        new Response(serperBody([{ link: "https://a.example/", title: "A" }]), {
+          status: 200,
+          headers: JSON_HEADERS,
+        }),
+    );
+    const results = await withGlobalFetch(impl, () =>
+      search("q", { provider: "serper", apiKey: KEY }),
+    );
+    expect(results).toEqual([{ url: "https://a.example/", title: "A" }]);
+    expect(calls[0]?.url).toContain("google.serper.dev");
+    expect(calls[0]?.headers.get("x-api-key")).toBe(KEY);
+  });
+
+  it("resolves 'tavily' with the env-var key when apiKey is absent", async () => {
+    process.env.TAVILY_API_KEY = "env-key";
+    const { impl, calls } = recordingFetch(
+      () => new Response(tavilyBody([]), { status: 200, headers: JSON_HEADERS }),
+    );
+    await withGlobalFetch(impl, () => search("q", { provider: "tavily" }));
+    expect(calls[0]?.url).toContain("api.tavily.com");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer env-key");
+  });
+
+  it("resolves 'brave' — the string shorthand is equivalent to the adapter", async () => {
+    const { impl, calls } = recordingFetch(
+      () => new Response(braveBody([]), { status: 200, headers: JSON_HEADERS }),
+    );
+    await withGlobalFetch(impl, () => search("q", { provider: "brave", apiKey: KEY }));
+    expect(calls[0]?.url).toContain("api.search.brave.com");
+    expect(calls[0]?.headers.get("x-subscription-token")).toBe(KEY);
+  });
+
+  it("ignores apiKey when provider is an object", async () => {
+    let called = 0;
+    const provider: SearchProvider = {
+      search: async () => {
+        called += 1;
+        return [{ url: "https://a.example/" }];
+      },
+    };
+    const results = await search("q", { provider, apiKey: "ignored" });
+    expect(results).toEqual([{ url: "https://a.example/" }]);
+    expect(called).toBe(1);
+  });
+
+  it("rejects an unknown provider name listing the valid names", async () => {
+    const error = await search("q", { provider: "nope" as SearchProviderName }).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    expect(error).toBeInstanceOf(ConfigError);
+    expect((error as ConfigError).message).toContain('"brave"');
+    expect((error as ConfigError).message).toContain('"serper"');
+    expect((error as ConfigError).message).toContain('"tavily"');
+  });
+
+  it("treats Object.prototype member names as unknown providers, not factories", async () => {
+    // A bare index into the registry would hand back `toString`/
+    // `constructor` (blowing up far from the cause) and throw a raw
+    // TypeError for "__proto__" — outside the ScrapeError taxonomy. Each
+    // must get the same ConfigError as any other unknown name.
+    for (const name of ["toString", "constructor", "__proto__"]) {
+      const error = await search("q", { provider: name as SearchProviderName }).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+      expect(error).toBeInstanceOf(ConfigError);
+      expect((error as ConfigError).message).toContain("Unknown search provider");
+      expect((error as ConfigError).message).toContain('"brave"');
+    }
+  });
+
+  it("every SEARCH_PROVIDER_NAMES entry resolves through search()", async () => {
+    // The exported list IS the registry's key set — a drift between them
+    // would make `provider: "<name>"` lie.
+    const { impl } = recordingFetch(
+      () => new Response(JSON.stringify({}), { status: 200, headers: JSON_HEADERS }),
+    );
+    await withGlobalFetch(impl, async () => {
+      for (const name of SEARCH_PROVIDER_NAMES) {
+        expect(await search("q", { provider: name, apiKey: KEY })).toEqual([]);
+      }
+    });
+  });
+});
+
+describe("method/body — provider-only fetch options", () => {
+  const page = () =>
+    new Response("<html><body><h1>A</h1></body></html>", {
+      status: 200,
+      headers: HTML_HEADERS,
+    });
+
+  it("rejects `method`/`body` on the page-scrape path instead of silently GETting", async () => {
+    const { impl, calls } = recordingFetch(page);
+    await expect(
+      scrape("https://a.example/", { title: "h1" }, { fetch: impl, robots: false, method: "POST" }),
+    ).rejects.toBeInstanceOf(ConfigError);
+    await expect(
+      scrape("https://a.example/", { title: "h1" }, { fetch: impl, robots: false, body: "{}" }),
+    ).rejects.toBeInstanceOf(ConfigError);
+    await expect(
+      fetchHtml("https://a.example/", { fetch: impl, robots: false, method: "POST" }),
+    ).rejects.toBeInstanceOf(ConfigError);
+    // Fail BEFORE the wire — a rejected call must not have fetched.
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects `method`/`body` on `map` and `crawl` too", async () => {
+    const { impl, calls } = recordingFetch(page);
+    await expect(
+      map("https://a.example/", { fetch: impl, robots: false, method: "POST" }),
+    ).rejects.toBeInstanceOf(ConfigError);
+    // crawl records fetch-level failures per page rather than rejecting —
+    // the ConfigError still surfaces there instead of a silent GET.
+    const result = await crawl("https://a.example/", {
+      fetch: impl,
+      robots: false,
+      body: "{}",
+    });
+    expect(result.pages[0]?.error).toBeInstanceOf(ConfigError);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects `body` on a body-less method before the wire", async () => {
+    const { impl, calls } = recordingFetch(page);
+    // No method at all means the default GET — still no body allowed.
+    await expect(
+      fetchHtmlOnce("https://a.example/", { fetch: impl, body: "{}" }),
+    ).rejects.toBeInstanceOf(ConfigError);
+    // Fetch normalizes method names to uppercase, so "get" IS GET.
+    for (const method of ["GET", "HEAD", "get"]) {
+      await expect(
+        fetchHtmlOnce("https://a.example/", { fetch: impl, method, body: "{}" }),
+      ).rejects.toBeInstanceOf(ConfigError);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("still POSTs through fetchHtmlOnce — the seam the providers use", async () => {
+    const { impl, calls } = recordingFetch(page);
+    await fetchHtmlOnce("https://a.example/", { fetch: impl, method: "POST", body: "{}" });
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.body).toBe("{}");
   });
 });
 

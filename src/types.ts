@@ -278,6 +278,22 @@ export interface CaptchaSolver {
 
 /** Options controlling a single HTTP fetch. */
 export interface FetchHtmlOptions {
+  /**
+   * HTTP method. Defaults to `"GET"`. Non-GET methods are used by API-backed
+   * callers driving {@link fetchHtmlOnce} directly (e.g. search providers
+   * POSTing a JSON query); the `scrape`/`map`/`crawl` page pipeline always
+   * issues GETs and rejects `method`/`body` with a {@link ConfigError}
+   * rather than silently fetching a GET.
+   */
+  method?: string;
+  /**
+   * Request body, sent verbatim. Pair it with an explicit `content-type`
+   * header via {@link FetchHtmlOptions.headers} — the SDK does not infer one.
+   * Requires a body-capable {@link FetchHtmlOptions.method} (`POST`, ...) —
+   * a body on a GET/HEAD request is a {@link ConfigError}. Same page-pipeline
+   * restriction as `method`.
+   */
+  body?: string;
   /** Override the User-Agent header. */
   userAgent?: string;
   /** Extra headers sent with the request. */

@@ -342,6 +342,16 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
         cause: merged.signal.reason,
       });
     }
+    // `method`/`body` are `fetchHtmlOnce`-only options — the seam the
+    // search providers POST through. The page pipeline always issues a
+    // GET, so setting them here is a caller bug to name loudly (same rule
+    // as the CLI's render-only flags), never an option to silently drop.
+    if (call?.method !== undefined || call?.body !== undefined) {
+      throw new ConfigError(
+        "`method`/`body` do not apply to page fetches — scraping always issues a GET; API-style requests belong on `fetchHtmlOnce`",
+        { url: target.toString() },
+      );
+    }
     // Validate here so p-retry's own TypeErrors never leak past the SDK
     // boundary (every thrown error must be a ScrapeError).
     if (merged.retries !== undefined && (!Number.isInteger(merged.retries) || merged.retries < 0)) {

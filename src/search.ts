@@ -54,10 +54,76 @@ export interface SearchProvider {
   search(query: string, options?: SearchCallOptions): Promise<SearchResult[]>;
 }
 
+/**
+ * The built-in providers {@link search} can resolve by name — the search-side
+ * counterpart to `render`'s `engine` names. Each maps to the
+ * `<name>SearchProvider` adapter with its env-var API-key default. This list
+ * is the single source of truth: the registry keys, the
+ * {@link SearchProviderName} type, and the CLI's `--provider` validation all
+ * derive from it.
+ */
+export const SEARCH_PROVIDER_NAMES = ["brave", "serper", "tavily"] as const;
+
+/** A built-in provider name — one of {@link SEARCH_PROVIDER_NAMES}. */
+export type SearchProviderName = (typeof SEARCH_PROVIDER_NAMES)[number];
+
 /** Options accepted by {@link search}: the provider plus per-call budget. */
 export interface SearchOptions extends SearchCallOptions {
-  /** The provider the query is delegated to — required. */
-  provider: SearchProvider;
+  /**
+   * The provider the query is delegated to — required. Either a
+   * {@link SearchProvider} object, or the name of a built-in adapter
+   * ({@link SearchProviderName}), which resolves with its env-var API-key
+   * fallback (`BRAVE_API_KEY`, `SERPER_API_KEY`, `TAVILY_API_KEY`).
+   */
+  provider: SearchProvider | SearchProviderName;
+  /**
+   * API key for a NAME-resolved provider — forwarded to the adapter factory,
+   * overriding its env-var fallback. Ignored when `provider` is a
+   * {@link SearchProvider} object: an object carries its own config.
+   */
+  apiKey?: string;
+}
+
+/**
+ * Name → adapter factory, backing the `provider: "<name>"` shorthand. The
+ * factories take only an optional explicit key — everything else (baseUrl,
+ * fetch) stays the adapter's default, which is what makes the shorthand
+ * zero-config.
+ */
+const SEARCH_PROVIDER_REGISTRY: Record<SearchProviderName, (apiKey?: string) => SearchProvider> = {
+  brave: (apiKey) => braveSearchProvider(apiKey === undefined ? {} : { apiKey }),
+  serper: (apiKey) => serperSearchProvider(apiKey === undefined ? {} : { apiKey }),
+  tavily: (apiKey) => tavilySearchProvider(apiKey === undefined ? {} : { apiKey }),
+};
+
+/**
+ * Turn `options.provider` into a {@link SearchProvider}: a name resolves
+ * through {@link SEARCH_PROVIDER_REGISTRY} (a factory that throws — e.g. a
+ * missing API key — surfaces its own {@link ConfigError}); an object is
+ * validated to actually implement the interface.
+ */
+function resolveSearchProvider(
+  provider: SearchProvider | SearchProviderName | undefined,
+  apiKey: string | undefined,
+): SearchProvider {
+  if (typeof provider === "string") {
+    // `Object.hasOwn`, never a bare index lookup: an inherited member
+    // ("toString", "constructor") would resolve as a "factory" and explode
+    // later, and "__proto__" would throw a raw TypeError right here —
+    // outside the ScrapeError taxonomy. Every non-own name must get the
+    // same ConfigError as any other unknown provider.
+    if (!Object.hasOwn(SEARCH_PROVIDER_REGISTRY, provider)) {
+      const names = SEARCH_PROVIDER_NAMES.map((name) => `"${name}"`).join(", ");
+      throw new ConfigError(
+        `Unknown search provider ${JSON.stringify(provider)} — expected one of ${names}`,
+      );
+    }
+    return SEARCH_PROVIDER_REGISTRY[provider as SearchProviderName](apiKey);
+  }
+  if (provider === undefined || provider === null || typeof provider.search !== "function") {
+    throw new ConfigError("`search` requires a `provider` implementing `search(query, options)`");
+  }
+  return provider;
 }
 
 /**
@@ -65,8 +131,10 @@ export interface SearchOptions extends SearchCallOptions {
  * to {@link scrape}/{@link map}/{@link crawl}.
  *
  * The provider is INJECTED, never bundled: crawlio has no search index of its
- * own. {@link braveSearchProvider} covers the Brave Search API; any object
- * implementing {@link SearchProvider} slots in instead.
+ * own. `options.provider` takes a built-in name (`"brave"`, `"serper"`,
+ * `"tavily"` — resolved through {@link SEARCH_PROVIDER_REGISTRY} with the
+ * matching env-var key, or `options.apiKey`) or any object implementing
+ * {@link SearchProvider}.
  *
  * The query is trimmed and must be non-empty ({@link ConfigError} otherwise).
  * `options.limit` is forwarded to the provider AND enforced client-side on
@@ -83,16 +151,17 @@ export interface SearchOptions extends SearchCallOptions {
  *
  * @example
  * const results = await search("crawlio sdk", {
- *   provider: braveSearchProvider(), // BRAVE_API_KEY env
+ *   provider: "brave", // BRAVE_API_KEY env — or `apiKey: "..."`
+ *   limit: 10,
+ * });
+ * // Equivalent, configurable form:
+ * const results2 = await search("crawlio sdk", {
+ *   provider: braveSearchProvider(),
  *   limit: 10,
  * });
  * const pages = await scrapeMany(results.map((r) => r.url), { title: "h1" });
  */
 export async function search(query: string, options: SearchOptions): Promise<SearchResult[]> {
-  const provider = options?.provider;
-  if (provider === undefined || provider === null || typeof provider.search !== "function") {
-    throw new ConfigError("`search` requires a `provider` implementing `search(query, options)`");
-  }
   const trimmed = typeof query === "string" ? query.trim() : "";
   if (trimmed === "") {
     throw new ConfigError("`query` must be a non-empty string");
@@ -113,6 +182,12 @@ export async function search(query: string, options: SearchOptions): Promise<Sea
   // `limit: 0` is a complete answer — an empty list — so resolve it here
   // instead of spending a provider call (and its quota) on discarded hits.
   if (options.limit === 0) return [];
+
+  // The provider resolves LAST, after every input validation: a caller bug
+  // (empty query, bad limit/timeout/retries) must report itself, not the
+  // missing API key a name-resolved factory would demand — and `limit: 0`
+  // never needs a provider at all.
+  const provider = resolveSearchProvider(options?.provider, options?.apiKey);
 
   // `raw` is deliberately `unknown`: a provider is user code and may return
   // anything — the array/entry validation below is what earns the cast.
@@ -303,6 +378,268 @@ export function braveSearchProvider(options: BraveSearchProviderOptions = {}): S
         });
       }
       return hits;
+    },
+  };
+}
+
+/**
+ * POST a JSON query through the shared fetch machinery and decode the reply —
+ * the common plumbing of the POST-style providers (Serper, Tavily).
+ *
+ * The API key arrives inside `authHeader`, NOT in `payload`: keeping it out of
+ * the body means it cannot leak through payload dumps or logs of the request
+ * the way a body-carried `api_key` field could, and never through the URL.
+ * Requests go through `fetchHtmlOnce` (honest `crawlio/<version>` User-Agent,
+ * timeout, abort handling) wrapped in the shared {@link withRetries} policy —
+ * a 429 or 5xx retries with backoff, a caller abort does not.
+ *
+ * A 401/403 surfaces as an {@link HttpError} saying the key was rejected —
+ * the message names neither the key nor the header value. Malformed JSON is a
+ * {@link ParseError}.
+ */
+async function postSearchJson(
+  providerName: string,
+  requestUrl: string,
+  authHeader: Record<string, string>,
+  payload: Record<string, unknown>,
+  call: SearchCallOptions,
+  fetchImpl: typeof globalThis.fetch,
+): Promise<unknown> {
+  let fetched: FetchHtmlResult;
+  try {
+    fetched = await withRetries(
+      () =>
+        fetchHtmlOnce(
+          requestUrl,
+          {
+            method: "POST",
+            headers: {
+              accept: "application/json",
+              "content-type": "application/json",
+              ...authHeader,
+            },
+            body: JSON.stringify(payload),
+            timeout: call.timeout,
+            signal: call.signal,
+          },
+          fetchImpl,
+        ),
+      { retries: call.retries, signal: call.signal, url: requestUrl },
+    );
+  } catch (error) {
+    if (error instanceof HttpError && (error.status === 401 || error.status === 403)) {
+      throw new HttpError(`${providerName} API rejected the API key (HTTP ${error.status})`, {
+        url: requestUrl,
+        status: error.status,
+        statusText: error.statusText,
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  try {
+    return JSON.parse(fetched.html);
+  } catch (cause) {
+    throw new ParseError(`${providerName} API returned invalid JSON`, {
+      url: requestUrl,
+      cause,
+    });
+  }
+}
+
+/**
+ * Read `payload[listKey]` as untrusted data and map entries to
+ * {@link SearchResult}s: `urlKey` supplies `url` (a hit without one is
+ * dropped — a URL-less hit is useless downstream), `title` always comes from
+ * `title`, and `contentKey` supplies `description`. A missing or non-array
+ * list is an empty result, not an error — providers omit it when there are
+ * no hits.
+ */
+function mapSearchHits(
+  payload: unknown,
+  listKey: string,
+  urlKey: string,
+  contentKey: string,
+): SearchResult[] {
+  const list =
+    typeof payload === "object" && payload !== null
+      ? (payload as Record<string, unknown>)[listKey]
+      : undefined;
+  if (!Array.isArray(list)) return [];
+  const hits: SearchResult[] = [];
+  for (const entry of list) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    const hitUrl = record[urlKey];
+    if (typeof hitUrl !== "string" || hitUrl === "") continue;
+    const title = record.title;
+    const content = record[contentKey];
+    hits.push({
+      url: hitUrl,
+      ...(typeof title === "string" ? { title } : {}),
+      ...(typeof content === "string" ? { description: content } : {}),
+    });
+  }
+  return hits;
+}
+
+/** Options accepted by {@link serperSearchProvider}. */
+export interface SerperSearchProviderOptions {
+  /**
+   * Serper API key. Defaults to the `SERPER_API_KEY` environment variable; an
+   * explicit value wins. Travels in the `X-API-KEY` header ONLY — never in
+   * the request URL or body — so it cannot leak through error `url`s, logs,
+   * or fixtures.
+   */
+  apiKey?: string;
+  /**
+   * API endpoint. Defaults to Serper's Google search endpoint; overridable
+   * for tests and proxies.
+   */
+  baseUrl?: string;
+  /** Injected fetch implementation (useful for tests). */
+  fetch?: typeof globalThis.fetch;
+}
+
+/** Default Serper Google-search endpoint. */
+const SERPER_DEFAULT_BASE_URL = "https://google.serper.dev/search";
+
+/**
+ * A {@link SearchProvider} over the Serper.dev Google Search API.
+ *
+ * The API key comes from `options.apiKey` or the `SERPER_API_KEY` environment
+ * variable (explicit wins); a missing key is a {@link ConfigError} at
+ * construction, not mid-call. The request is a POST of `{"q": query,
+ * "num": limit}` with the key on the `X-API-KEY` header — never the URL,
+ * never the body, and error messages name neither.
+ *
+ * `response.organic[]` maps `link`/`title`/`snippet` to
+ * `{ url, title, description }`; a response without `organic` is an empty
+ * list, not an error, and malformed JSON is a {@link ParseError}. `num` is
+ * clamped to Serper's documented 1–100 bound; {@link search} still truncates
+ * client-side — the two mechanisms compose.
+ *
+ * @param options Provider configuration; see {@link SerperSearchProviderOptions}.
+ *
+ * @example
+ * const provider = serperSearchProvider(); // SERPER_API_KEY env
+ * const results = await search("typed scraping sdk", { provider, limit: 5 });
+ */
+export function serperSearchProvider(options: SerperSearchProviderOptions = {}): SearchProvider {
+  const apiKey = (options.apiKey ?? process.env.SERPER_API_KEY)?.trim();
+  if (apiKey === undefined || apiKey === "") {
+    throw new ConfigError(
+      "`serperSearchProvider` needs an API key — pass `apiKey` or set the SERPER_API_KEY environment variable",
+    );
+  }
+  const baseUrl = options.baseUrl ?? SERPER_DEFAULT_BASE_URL;
+  let endpoint: URL;
+  try {
+    endpoint = new URL(baseUrl);
+  } catch (cause) {
+    throw new ConfigError(`\`baseUrl\` must be a valid URL, got ${scrubUrl(baseUrl)}`, { cause });
+  }
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const requestUrl = endpoint.toString();
+
+  return {
+    async search(query: string, call: SearchCallOptions = {}): Promise<SearchResult[]> {
+      const payload: Record<string, unknown> = { q: query };
+      // `num` bounds the API response server-side — Serper accepts 1–100, so
+      // clamp rather than let the API reject the request.
+      if (call.limit !== undefined) {
+        payload.num = Math.min(Math.max(1, call.limit), 100);
+      }
+      const body = await postSearchJson(
+        "Serper",
+        requestUrl,
+        { "x-api-key": apiKey },
+        payload,
+        call,
+        fetchImpl,
+      );
+      return mapSearchHits(body, "organic", "link", "snippet");
+    },
+  };
+}
+
+/** Options accepted by {@link tavilySearchProvider}. */
+export interface TavilySearchProviderOptions {
+  /**
+   * Tavily API key. Defaults to the `TAVILY_API_KEY` environment variable; an
+   * explicit value wins. Travels in the `Authorization: Bearer` header ONLY —
+   * never in the request URL or body — so it cannot leak through error
+   * `url`s, logs, or fixtures.
+   */
+  apiKey?: string;
+  /**
+   * API endpoint. Defaults to Tavily's search endpoint; overridable for
+   * tests and proxies.
+   */
+  baseUrl?: string;
+  /** Injected fetch implementation (useful for tests). */
+  fetch?: typeof globalThis.fetch;
+}
+
+/** Default Tavily search endpoint. */
+const TAVILY_DEFAULT_BASE_URL = "https://api.tavily.com/search";
+
+/**
+ * A {@link SearchProvider} over the Tavily Search API.
+ *
+ * The API key comes from `options.apiKey` or the `TAVILY_API_KEY` environment
+ * variable (explicit wins); a missing key is a {@link ConfigError} at
+ * construction, not mid-call. The request is a POST of `{"query": query,
+ * "max_results": limit}` authenticated by `Authorization: Bearer <key>` —
+ * the key is deliberately NOT the body's `api_key` field, keeping credentials
+ * out of the payload — and error messages name neither.
+ *
+ * `response.results[]` maps `url`/`title`/`content` to
+ * `{ url, title, description }`; a response without `results` is an empty
+ * list, not an error, and malformed JSON is a {@link ParseError}.
+ * `max_results` is clamped to Tavily's documented 1–20 bound; {@link search}
+ * still truncates client-side — the two mechanisms compose.
+ *
+ * @param options Provider configuration; see {@link TavilySearchProviderOptions}.
+ *
+ * @example
+ * const provider = tavilySearchProvider(); // TAVILY_API_KEY env
+ * const results = await search("typed scraping sdk", { provider, limit: 5 });
+ */
+export function tavilySearchProvider(options: TavilySearchProviderOptions = {}): SearchProvider {
+  const apiKey = (options.apiKey ?? process.env.TAVILY_API_KEY)?.trim();
+  if (apiKey === undefined || apiKey === "") {
+    throw new ConfigError(
+      "`tavilySearchProvider` needs an API key — pass `apiKey` or set the TAVILY_API_KEY environment variable",
+    );
+  }
+  const baseUrl = options.baseUrl ?? TAVILY_DEFAULT_BASE_URL;
+  let endpoint: URL;
+  try {
+    endpoint = new URL(baseUrl);
+  } catch (cause) {
+    throw new ConfigError(`\`baseUrl\` must be a valid URL, got ${scrubUrl(baseUrl)}`, { cause });
+  }
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const requestUrl = endpoint.toString();
+
+  return {
+    async search(query: string, call: SearchCallOptions = {}): Promise<SearchResult[]> {
+      const payload: Record<string, unknown> = { query };
+      // `max_results` bounds the API response server-side — Tavily accepts
+      // 1–20, so clamp rather than let the API reject the request.
+      if (call.limit !== undefined) {
+        payload.max_results = Math.min(Math.max(1, call.limit), 20);
+      }
+      const body = await postSearchJson(
+        "Tavily",
+        requestUrl,
+        { authorization: `Bearer ${apiKey}` },
+        payload,
+        call,
+        fetchImpl,
+      );
+      return mapSearchHits(body, "results", "url", "content");
     },
   };
 }

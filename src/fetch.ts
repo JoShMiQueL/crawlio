@@ -64,6 +64,19 @@ export async function fetchHtmlOnce(
   options: FetchHtmlOptions = {},
   fetchImpl: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<FetchHtmlResult> {
+  // `body` needs a body-capable method: GET/HEAD cannot carry one, and
+  // undici would throw a raw TypeError from the Request constructor —
+  // after which the shared retry policy would waste every attempt on a
+  // deterministic config mistake. Method names normalize to uppercase per
+  // the fetch spec, so compare case-insensitively ("get" IS GET).
+  const method = options.method ?? "GET";
+  const normalizedMethod = method.toUpperCase();
+  if (options.body !== undefined && (normalizedMethod === "GET" || normalizedMethod === "HEAD")) {
+    throw new ConfigError(
+      `\`body\` requires a body-capable \`method\` — ${JSON.stringify(method)} requests cannot carry one`,
+      { url },
+    );
+  }
   let impl = options.fetch ?? fetchImpl;
   // Per-call proxy routing for direct callers: a one-shot, stateless pool —
   // sticky per-origin state lives with createScraper, not here.
@@ -103,6 +116,11 @@ export async function fetchHtmlOnce(
 
   try {
     const response = await impl(url, {
+      // `method`/`body` exist for API-backed callers (search providers POST
+      // JSON); page scraping never sets them — the scrape path rejects them
+      // outright — so the wire request stays a plain GET.
+      method,
+      body: options.body,
       headers:
         profile === undefined
           ? overlayHeaders({ "user-agent": userAgent, accept: ACCEPT }, options.headers)

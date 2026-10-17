@@ -7,7 +7,7 @@
  *   crawlio scrape <url> [--fields 'title=h1;links=a.href@all'] [--render auto|always] [--json]
  *   crawlio map <url> [--limit N]
  *   crawlio crawl <url> [--max-depth N] [--max-pages N]
- *   crawlio search <query> [--limit N] [--json]
+ *   crawlio search <query> [--provider brave|serper|tavily] [--api-key <key>] [--limit N] [--json]
  *   crawlio install [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--dry-run]
  */
 import { spawn } from "node:child_process";
@@ -18,15 +18,16 @@ import {
   installCommands,
   parseCount,
   parseFieldsSpec,
+  rejectSearchOnlyFlags,
 } from "./cli-args.js";
-import type { Renderer, RenderMode } from "./index.js";
+import type { Renderer, RenderMode, SearchProviderName } from "./index.js";
 import {
-  braveSearchProvider,
   ConfigError,
   crawl,
   createScraper,
   map,
   ScrapeError,
+  SEARCH_PROVIDER_NAMES,
   search,
   VERSION,
 } from "./index.js";
@@ -80,9 +81,10 @@ crawl options:
   --max-pages N          Hard cap on pages fetched (default 50).
 
 search options:
+  --provider brave|serper|tavily   Search provider (default brave).
+  --api-key <key>        Provider API key — overrides the provider's env var
+                         (BRAVE_API_KEY / SERPER_API_KEY / TAVILY_API_KEY).
   --limit N              Maximum results returned.
-  Uses the Brave Search API — the key comes from the BRAVE_API_KEY
-  environment variable.
 
 install options:
   --engine playwright|puppeteer   Engine to install (default playwright).
@@ -228,6 +230,8 @@ async function main(argv: string[]): Promise<number> {
       "wait-for": { type: "string" },
       "wait-ms": { type: "string" },
       limit: { type: "string" },
+      provider: { type: "string" },
+      "api-key": { type: "string" },
       "max-depth": { type: "string" },
       "max-pages": { type: "string" },
       json: { type: "boolean", default: false },
@@ -250,6 +254,7 @@ async function main(argv: string[]): Promise<number> {
   switch (command) {
     case "scrape": {
       if (url === undefined) throw new ConfigError("`scrape` needs a URL");
+      rejectSearchOnlyFlags(values, "scrape");
       const fields =
         values.fields === undefined ? { title: "title" } : parseFieldsSpec(values.fields);
       let renderMode: RenderMode | undefined;
@@ -305,12 +310,14 @@ async function main(argv: string[]): Promise<number> {
     }
     case "map": {
       if (url === undefined) throw new ConfigError("`map` needs a URL");
+      rejectSearchOnlyFlags(values, "map");
       const result = await map(url, { limit: parseCount(values.limit, "--limit") });
       printJson(result, values.json);
       return 0;
     }
     case "crawl": {
       if (url === undefined) throw new ConfigError("`crawl` needs a URL");
+      rejectSearchOnlyFlags(values, "crawl");
       const result = await crawl(url, {
         maxDepth: parseCount(values["max-depth"], "--max-depth"),
         maxPages: parseCount(values["max-pages"], "--max-pages"),
@@ -321,16 +328,26 @@ async function main(argv: string[]): Promise<number> {
     }
     case "search": {
       if (url === undefined) throw new ConfigError("`search` needs a query");
-      // The CLI wires the reference provider; its env-key resolution is
-      // what makes `crawlio search` a zero-config command.
+      const provider = values.provider ?? "brave";
+      if (!(SEARCH_PROVIDER_NAMES as readonly string[]).includes(provider)) {
+        throw new ConfigError(
+          `\`--provider\` must be one of ${SEARCH_PROVIDER_NAMES.map((name) => `"${name}"`).join(", ")}, got ${JSON.stringify(provider)}`,
+        );
+      }
+      // The name resolves through the library's provider registry; its
+      // env-key default (plus the `--api-key` override) is what makes
+      // `crawlio search` a zero-config command.
       const results = await search(url, {
-        provider: braveSearchProvider(),
+        // The `includes` check above is what this cast claims.
+        provider: provider as SearchProviderName,
+        ...(values["api-key"] === undefined ? {} : { apiKey: values["api-key"] }),
         limit: parseCount(values.limit, "--limit"),
       });
       printJson(results, values.json);
       return 0;
     }
     case "install": {
+      rejectSearchOnlyFlags(values, "install");
       const engine = values.engine ?? "playwright";
       if (engine !== "playwright" && engine !== "puppeteer") {
         throw new ConfigError(

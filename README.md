@@ -93,10 +93,10 @@ robots.txt, per-origin serialization, delays, retries, and stealth all apply.
 ### `search` — web search via providers
 
 ```ts
-import { braveSearchProvider, scrapeMany, search } from "crawlio";
+import { scrapeMany, search } from "crawlio";
 
 const results = await search("typed web scraping sdk", {
-  provider: braveSearchProvider(), // reads BRAVE_API_KEY
+  provider: "brave", // reads BRAVE_API_KEY — or pass `apiKey`
   limit: 10,
 });
 // results: { url, title?, description? }[]
@@ -108,9 +108,36 @@ const pages = await scrapeMany(
 );
 ```
 
+`provider` accepts a built-in name or an adapter object — the configurable
+form, mirroring the engine adapters:
+
+```ts
+import { serperSearchProvider, search } from "crawlio";
+
+const results = await search("typed web scraping sdk", {
+  provider: serperSearchProvider({ apiKey: "..." }), // or SERPER_API_KEY env
+  limit: 10,
+});
+```
+
+| `provider` name | Adapter | Env var |
+| --- | --- | --- |
+| `"brave"` | `braveSearchProvider` (Brave Search API) | `BRAVE_API_KEY` |
+| `"serper"` | `serperSearchProvider` (Serper.dev Google Search) | `SERPER_API_KEY` |
+| `"tavily"` | `tavilySearchProvider` (Tavily Search) | `TAVILY_API_KEY` |
+
+Every adapter takes `{ apiKey?, baseUrl?, fetch? }`: the key comes from
+`apiKey` or the env var (explicit wins — `search`'s `apiKey` option overrides
+the env var only when `provider` is a name; it is ignored for an object
+provider) and travels in a request header only — never in the URL, never in
+the body, never in error messages. Requests run through the same
+retry/backoff policy as page fetches, with the honest `crawlio/<version>`
+User-Agent. `query` is trimmed and must be non-empty; `limit` is forwarded to
+the provider AND enforced client-side on the returned list.
+
 `search` is a provider SEAM, not a search engine — crawlio ships no index (a
-declared non-goal). Any object implementing the `SearchProvider` interface
-slots in:
+declared non-goal). A custom provider just implements the `SearchProvider`
+interface directly — a self-hosted SearXNG, another API, a test stub:
 
 ```ts
 interface SearchProvider {
@@ -118,15 +145,6 @@ interface SearchProvider {
     Promise<{ url: string; title?: string; description?: string }[]>;
 }
 ```
-
-`braveSearchProvider({ apiKey?, baseUrl?, fetch? })` is the reference
-implementation over the Brave Search API: the key comes from `apiKey` or the
-`BRAVE_API_KEY` environment variable and travels in the
-`X-Subscription-Token` header only — never in the URL, never in error
-messages. Requests run through the same retry/backoff policy as page fetches,
-with the honest `crawlio/<version>` User-Agent. `query` is trimmed and must be
-non-empty; `limit` is forwarded to the provider (`count`) AND enforced
-client-side on the returned list.
 
 Prefer the terminal? The same toolkit ships as a `crawlio` binary —
 `crawlio --help` lists the commands (see [CLI](#cli)).
@@ -176,7 +194,7 @@ the library API.
 crawlio scrape <url> [--fields 'title=h1;links=a.href@all'] [--render auto|always] [--json]
 crawlio map <url> [--limit N]
 crawlio crawl <url> [--max-depth N] [--max-pages N]
-crawlio search <query> [--limit N] [--json]
+crawlio search <query> [--provider brave|serper|tavily] [--api-key <key>] [--limit N] [--json]
 crawlio install [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--dry-run]
 crawlio --help | --version
 ```
@@ -210,9 +228,11 @@ crawlio --help | --version
   `--wait-ms` all require `--render` and error out without it.
 - **`map`/`crawl`** print their JSON result (`--limit`, `--max-depth`,
   `--max-pages` map to the library options).
-- **`search`** queries the Brave Search API and prints the hits
-  (`--limit` caps them) — the key comes from the `BRAVE_API_KEY`
-  environment variable.
+- **`search`** queries a search provider and prints the hits (`--limit`
+  caps them). `--provider brave|serper|tavily` (default `brave`) picks the
+  adapter; the key comes from the provider's env var (`BRAVE_API_KEY`,
+  `SERPER_API_KEY`, `TAVILY_API_KEY`) or `--api-key <key>`, which overrides
+  it.
 - **`install`** detects the package manager (`packageManager` manifest
   field → lockfile sniff → npm fallback; npm, pnpm, bun and yarn are
   recognized) and dev-installs `playwright-core` or `puppeteer-core`

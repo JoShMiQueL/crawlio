@@ -40,9 +40,18 @@ export type {
   SearchCallOptions,
   SearchOptions,
   SearchProvider,
+  SearchProviderName,
   SearchResult,
+  SerperSearchProviderOptions,
+  TavilySearchProviderOptions,
 } from "./search.js";
-export { braveSearchProvider, search } from "./search.js";
+export {
+  braveSearchProvider,
+  SEARCH_PROVIDER_NAMES,
+  search,
+  serperSearchProvider,
+  tavilySearchProvider,
+} from "./search.js";
 export type {
   CaptchaChallenge,
   CaptchaSolution,

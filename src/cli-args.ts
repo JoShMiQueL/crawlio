@@ -123,6 +123,28 @@ export function parseCount(value: string | undefined, flag: string): number | un
   return Number(digits);
 }
 
+/**
+ * The `--provider`/`--api-key` flags mean something only on `crawlio
+ * search`. Passed to `scrape`/`map`/`crawl`/`install` they would be
+ * silently ignored, so fail loudly instead — the same treatment the
+ * render-only flags get on `scrape`.
+ */
+export function rejectSearchOnlyFlags(
+  values: { provider?: string; "api-key"?: string },
+  command: string,
+): void {
+  const searchOnly = [
+    ["--provider", values.provider],
+    ["--api-key", values["api-key"]],
+  ]
+    .filter(([, value]) => value !== undefined)
+    .map(([flag]) => `\`${flag}\``);
+  if (searchOnly.length === 0) return;
+  throw new ConfigError(
+    `${searchOnly.join(", ")} ${searchOnly.length === 1 ? "is" : "are"} only valid on \`crawlio search\`, not \`crawlio ${command}\``,
+  );
+}
+
 /** Package managers `crawlio install` knows how to drive. */
 export type PackageManager = "npm" | "pnpm" | "bun" | "yarn";
 
