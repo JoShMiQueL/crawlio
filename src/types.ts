@@ -1,5 +1,6 @@
 import type { CheerioOptions } from "cheerio";
 import type { ScrapeError } from "./errors.js";
+import type { Renderer, RenderMode } from "./render.js";
 
 /**
  * A field spec: either a bare CSS selector, or an options object.
@@ -355,7 +356,11 @@ export interface FetchHtmlOptions {
   throwOnHttpError?: boolean;
   /** Abort signal. */
   signal?: AbortSignal;
-  /** Injected fetch implementation (useful for tests). */
+  /**
+   * Injected fetch implementation (useful for tests). It serves the static
+   * HTTP path and robots.txt only — the renderer is a separate engine and
+   * never sees it.
+   */
   fetch?: typeof globalThis.fetch;
   /**
    * Route this request through one pinned proxy:
@@ -384,6 +389,36 @@ export interface FetchHtmlOptions {
   proxies?: string[];
   /** Rotation strategy for {@link FetchHtmlOptions.proxies}. Default `"per-origin"`. */
   proxyRotation?: ProxyRotation;
+  /**
+   * Pluggable renderer for JavaScript-dependent pages — see {@link Renderer}.
+   *
+   * A renderer is "an expensive fetcher": it navigates a real browser engine,
+   * waits, and returns the final HTML. It is INJECTED, never bundled — the
+   * SDK ships no engine. The engine owns its own context: stealth headers,
+   * the cookie jar, and proxy routing do NOT apply inside the browser, and
+   * browser-side cookies do not flow back into the SDK's jar.
+   *
+   * Consulted according to {@link FetchHtmlOptions.renderMode}. Rendered HTML
+   * flows through the same parse/extract pipeline as a static fetch, and
+   * {@link FetchHtmlResult.rendered} records which path served.
+   */
+  render?: Renderer;
+  /**
+   * When {@link FetchHtmlOptions.render} is consulted. Default `"auto"`.
+   *
+   * - `"always"` — the static fetch is skipped entirely; the renderer is the
+   *   fetch. A renderer failure propagates as the call's error.
+   * - `"auto"` — a static fetch runs first; the renderer fires only when the
+   *   result looks like a JS shell (`isLikelyDynamic`) or, on `scrape*`
+   *   calls, when a fields spec extracted to all-`undefined`. A renderer
+   *   failure falls back to the static result — `auto` never makes a page
+   *   worse than the static answer.
+   *
+   * `retries` applies to the static HTTP path only — a renderer call is one
+   * navigation, never retried. robots.txt gating applies to the URL before
+   * either path fires.
+   */
+  renderMode?: RenderMode;
 }
 
 /** The decoded result of a single fetched page. */
@@ -400,6 +435,14 @@ export interface FetchHtmlResult {
   contentType: string | null;
   /** The raw response headers. */
   headers: Headers;
+  /**
+   * Present and `true` when this page was served by the injected
+   * {@link Renderer} rather than the static HTTP path — an honest signal of
+   * which path answered. A rendered result carries no response headers or
+   * content-type metadata (the engine owns its context), so `headers` is
+   * empty and `status` defaults to 200 when the renderer did not report one.
+   */
+  rendered?: boolean;
 }
 
 /** Options controlling scraping behaviour (fetch + parse + extract). */
@@ -459,6 +502,10 @@ export interface ScraperOptions {
   proxies?: string[];
   /** Instance default for {@link FetchHtmlOptions.proxyRotation}. */
   proxyRotation?: ProxyRotation;
+  /** Instance default for {@link FetchHtmlOptions.render}. */
+  render?: Renderer;
+  /** Instance default for {@link FetchHtmlOptions.renderMode}. */
+  renderMode?: RenderMode;
 }
 
 /** A stateful scraper created by {@link createScraper}. */

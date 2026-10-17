@@ -16,6 +16,7 @@ import { DEFAULT_RETRIES, DEFAULT_TIMEOUT, DEFAULT_USER_AGENT, fetchHtmlOnce } f
 import { mapImpl } from "./map.js";
 import { parseHtml } from "./parse.js";
 import { PROXY_FETCH_CONFLICT, ProxyPool, type ProxyPoolOptions } from "./proxy.js";
+import { isLikelyDynamic, type RenderedPage } from "./render.js";
 import { fetchRobotsTxtResult, type RobotsAgent, robotsAllowed, robotsUrlFor } from "./robots.js";
 import {
   CookieJar,
@@ -161,6 +162,8 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     solver: options.solver,
     fetch: options.fetch,
     proxyRotation: options.proxyRotation ?? "per-origin",
+    render: options.render,
+    renderMode: options.renderMode,
   };
   const limit = pLimit(defaults.concurrency);
   // Instance-level proxies build ONE stateful pool up front — origin bindings
@@ -223,6 +226,8 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
       // into fetchHtmlOnce, which builds its own stateless pool when it sees
       // them (it supports them for direct callers).
       proxyRotation: call?.proxyRotation ?? defaults.proxyRotation,
+      render: call?.render ?? defaults.render,
+      renderMode: call?.renderMode ?? defaults.renderMode,
       baseUrl: (call as ScrapeOptions | undefined)?.baseUrl,
       parseOptions: (call as ScrapeOptions | undefined)?.parseOptions,
       concurrency: (call as ScrapeOptions | undefined)?.concurrency,
@@ -310,10 +315,17 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
    * origin's chain therefore holds NO global slot — the cap only binds while a
    * request is actually in flight. (The reverse order would let queued same-origin
    * tasks squat on global slots and starve other origins.)
+   *
+   * `dynamicTrigger` is the `scrape*`-only extension of the `auto` render
+   * trigger: it receives the static result and answers "this content is
+   * insufficient" (a fields spec that extracted to all-`undefined`). It runs
+   * ONLY when a renderer is configured and `renderMode` is `auto` — with no
+   * renderer there is nothing to escalate to, so the extra parse is skipped.
    */
   async function fetchHtmlImpl(
     url: string | URL,
     call: FetchHtmlOptions | ScrapeOptions | undefined,
+    dynamicTrigger?: (result: FetchHtmlResult) => boolean,
   ): Promise<FetchHtmlResult> {
     const merged = mergedOptions(call);
     let target: URL;
@@ -374,6 +386,32 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
         { url: target.toString() },
       );
     }
+    if (
+      merged.renderMode !== undefined &&
+      merged.renderMode !== "auto" &&
+      merged.renderMode !== "always"
+    ) {
+      throw new ConfigError(
+        `\`renderMode\` must be "auto" or "always", got ${JSON.stringify(merged.renderMode)}`,
+        { url: target.toString() },
+      );
+    }
+    if (merged.renderMode === "always" && merged.render === undefined) {
+      throw new ConfigError('`renderMode: "always"` requires a `render` renderer', {
+        url: target.toString(),
+      });
+    }
+    if (merged.render !== undefined && typeof merged.render.render !== "function") {
+      throw new ConfigError("`render` must implement `render(url, options)`", {
+        url: target.toString(),
+      });
+    }
+    const renderer = merged.render;
+    const renderMode = merged.renderMode ?? "auto";
+    // Crawl carries its extraction spec on the options object itself, so the
+    // same "fields extracted to all-undefined" auto trigger applies there
+    // without a decider argument.
+    const crawlFields = (call as CrawlOptions | undefined)?.fields;
 
     // Bypassing the origin queue does not bypass the global cap — `limit`
     // sits inside the scheduled task either way. It does bypass `requestDelay`,
@@ -643,8 +681,91 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
           }
         }
 
+        /**
+         * One render-engine navigation — "an expensive fetcher": navigate,
+         * wait, return the final HTML. The engine owns its own context
+         * (stealth headers, cookie jar and proxy routing do NOT apply inside
+         * it), so the result carries an empty header bag; the same
+         * `throwOnHttpError` semantics as a static response apply to a
+         * renderer-reported error status. The declared crawl-delay still
+         * paces the render — politeness does not end at the transport.
+         *
+         * A renderer is a user callback, like `solver`: a caller abort
+         * surfaces as FetchError, a ScrapeError passes through, anything else
+         * is wrapped in ConfigError so the taxonomy holds.
+         *
+         * Deliberately NOT wrapped in `p-retry`: one navigation per render
+         * call — `retries` paces the static HTTP path only.
+         */
+        const renderOnce = async (): Promise<FetchHtmlResult> => {
+          if (renderer === undefined) throw new ConfigError("No renderer configured");
+          if (crawlDelayMs > 0) await sleep(crawlDelayMs);
+          let page: RenderedPage;
+          try {
+            page = await renderer.render(target.toString(), {
+              timeout: merged.timeout,
+              signal: merged.signal,
+              userAgent,
+            });
+          } catch (cause) {
+            if (cause instanceof DOMException && cause.name === "AbortError") {
+              throw new FetchError("Request aborted by caller", {
+                url: target.toString(),
+                cause,
+              });
+            }
+            if (cause instanceof ScrapeError) throw cause;
+            throw new ConfigError("Renderer failed", { url: target.toString(), cause });
+          }
+          const rendered: FetchHtmlResult = {
+            url: scrubUrl(page.url || target.toString()),
+            status: page.status ?? 200,
+            statusText: "",
+            html: page.html,
+            contentType: "text/html",
+            headers: new Headers(),
+            rendered: true,
+          };
+          recordResponse(rendered);
+          if (
+            merged.throwOnHttpError !== false &&
+            (rendered.status < 200 || rendered.status >= 300)
+          ) {
+            throw new HttpError(`HTTP ${rendered.status}`.trim(), {
+              url: target.toString(),
+              status: rendered.status,
+            });
+          }
+          return rendered;
+        };
+
+        // `"always"`: the static wire fetch never fires — the renderer IS the
+        // fetch, so its failure is the call's failure. robots.txt has still
+        // gated the URL above.
+        if (renderer !== undefined && renderMode === "always") {
+          return await renderOnce();
+        }
+
+        /**
+         * `auto` escalation: the static result is insufficient when it looks
+         * like a JS shell (the isLikelyDynamic heuristic) OR a fields spec —
+         * scrape*()'s decider or crawl's own `fields` — extracted to
+         * all-`undefined`. The heuristic runs first: it is the cheaper check
+         * and the only one fetchHtml-level calls have.
+         */
+        const wantsRender = (result: FetchHtmlResult): boolean => {
+          if (isLikelyDynamic(result.html)) return true;
+          if (dynamicTrigger?.(result) === true) return true;
+          if (crawlFields !== undefined) {
+            const root = parseHtml(result.html, (call as ScrapeOptions | undefined)?.parseOptions);
+            const data = extract(root, crawlFields, { baseUrl: result.url });
+            return Object.values(data).every((value) => value === undefined);
+          }
+          return false;
+        };
+
         try {
-          return await pRetry(
+          const staticResult = await pRetry(
             async () => {
               if (crawlDelayMs > 0) await sleep(crawlDelayMs);
               return attemptOnce();
@@ -659,6 +780,35 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
               shouldRetry: (context) => shouldRetry(context.error),
             },
           );
+          if (renderer !== undefined && renderMode === "auto" && wantsRender(staticResult)) {
+            try {
+              // The escalation fires a SECOND same-origin request that
+              // schedule() cannot pace — the static fetch already consumed
+              // this task's `requestDelay` slot. Pace the render off it here
+              // ("always" needs nothing: schedule() paced the render
+              // directly). `requestDelay` only exists while the origin queue
+              // does, so `serializePerOrigin: false` skips this too.
+              const paceMs =
+                merged.serializePerOrigin === false ? 0 : sampleRequestDelay(merged.requestDelay);
+              if (paceMs > 0 && merged.signal?.aborted !== true) await sleep(paceMs);
+              // A caller abort that landed during the pause is the call's
+              // error, not a render failure to fall back from.
+              if (merged.signal?.aborted) {
+                throw new FetchError("Request aborted by caller", {
+                  url: target.toString(),
+                  cause: merged.signal.reason,
+                });
+              }
+              return await renderOnce();
+            } catch (renderError) {
+              // `auto` degrades gracefully: a failed render never makes the
+              // page worse than the static answer. A caller abort is not a
+              // render failure, though — it is honoured, not swallowed.
+              if (merged.signal?.aborted) throw renderError;
+              return staticResult;
+            }
+          }
+          return staticResult;
         } catch (cause) {
           // p-retry rejects with `signal.reason` — a raw DOMException — when the
           // caller's signal aborts mid-backoff (between attempts). That bypasses
@@ -681,12 +831,37 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     return { baseUrl: call?.baseUrl ?? url };
   }
 
+  /**
+   * Build the `auto`-mode fields decider for `scrape*` calls: a spec that
+   * extracted to all-`undefined` on the static page suggests JS-dependent
+   * content — the same parse/extract pipeline the caller runs downstream.
+   * For `scrapeAll`-shaped calls (`container` set) every container record
+   * must be all-`undefined`; an empty match list counts, since an
+   * unrendered listing is exactly what that usually means.
+   */
+  function fieldsAllUndefined(
+    fields: FieldSpecRecord,
+    container: string | undefined,
+    call: ScrapeOptions | undefined,
+  ): (result: FetchHtmlResult) => boolean {
+    return (result) => {
+      const root = parseHtml(result.html, call?.parseOptions);
+      const options = extractOptionsFor(result.url, call);
+      if (container === undefined) {
+        const data = extract(root, fields, options);
+        return Object.values(data).every((value) => value === undefined);
+      }
+      const items = extractAll(root, container, fields, options);
+      return items.every((item) => Object.values(item).every((value) => value === undefined));
+    };
+  }
+
   async function scrapeImpl<S extends FieldSpecRecord>(
     url: string | URL,
     fields: S,
     call?: ScrapeOptions,
   ): Promise<ExtractResult<S>> {
-    const fetched = await fetchHtmlImpl(url, call);
+    const fetched = await fetchHtmlImpl(url, call, fieldsAllUndefined(fields, undefined, call));
     const root = parseHtml(fetched.html, call?.parseOptions);
     return extract(root, fields, extractOptionsFor(fetched.url, call));
   }
@@ -697,7 +872,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     fields: S,
     call?: ScrapeOptions,
   ): Promise<Array<ExtractResult<S>>> {
-    const fetched = await fetchHtmlImpl(url, call);
+    const fetched = await fetchHtmlImpl(url, call, fieldsAllUndefined(fields, container, call));
     const root = parseHtml(fetched.html, call?.parseOptions);
     return extractAll(root, container, fields, extractOptionsFor(fetched.url, call));
   }
@@ -735,7 +910,11 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
         batchLimit(async (): Promise<ScrapeBatchItem<S>> => {
           const urlString = String(url);
           try {
-            const fetched = await fetchHtmlImpl(url, call);
+            const fetched = await fetchHtmlImpl(
+              url,
+              call,
+              fieldsAllUndefined(fields, undefined, call),
+            );
             const root = parseHtml(fetched.html, call?.parseOptions);
             const data = extract(root, fields, extractOptionsFor(fetched.url, call));
             return { url: scrubUrl(fetched.url), ok: true, data, status: fetched.status };

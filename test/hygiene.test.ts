@@ -34,9 +34,11 @@ describe("test source hygiene", () => {
   });
 
   it("imports the public surface from ../src/index.js", () => {
-    // The only sanctioned submodule import is src/errors.js, which holds the internal
-    // scrubUrl() helper that is deliberately not part of the public API.
-    const allowed = new Set(["../src/errors.js"]);
+    // Sanctioned submodule imports: src/errors.js holds the internal
+    // scrubUrl() helper that is deliberately not part of the public API, and
+    // src/render/playwright.js is the `crawlio/render` subpath export — it
+    // cannot come through index.js because its peer dep must stay optional.
+    const allowed = new Set(["../src/errors.js", "../src/render/playwright.js"]);
     const offenders = testSources.flatMap(({ name, text }) =>
       [...text.matchAll(/from "(\.\.\/src\/[^"]+)"/g)]
         .map((match) => match[1] as string)

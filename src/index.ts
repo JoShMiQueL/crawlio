@@ -20,6 +20,8 @@ export { DEFAULT_RETRIES, DEFAULT_TIMEOUT, DEFAULT_USER_AGENT, fetchHtmlOnce } f
 export { parseHtml } from "./parse.js";
 export type { ProxyFetchFactory, ProxyPoolOptions } from "./proxy.js";
 export { ProxyPool } from "./proxy.js";
+export type { RenderCallOptions, RenderedPage, Renderer, RenderMode } from "./render.js";
+export { isLikelyDynamic } from "./render.js";
 export type { RobotsAgent } from "./robots.js";
 export { fetchRobotsTxt, parseRobots, robotsAllowed, robotsUrlFor } from "./robots.js";
 export {

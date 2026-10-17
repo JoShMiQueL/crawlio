@@ -18,7 +18,7 @@ in your own process, not a hosted service.
 | `map` — discover all URLs on a site | done |
 | `crawl` — recursive same-site traversal | done |
 | Proxies — pool routing with rotation and ban-aware health checks | done |
-| `render` seam + `isLikelyDynamic` — headless engine injection for JS pages | planned |
+| `render` seam + `isLikelyDynamic` — headless engine injection for JS pages | done |
 | `search` — via external search providers | planned |
 | MCP server — expose the toolkit to agents | planned |
 
@@ -224,6 +224,69 @@ Rules and honest caveats:
 - **Free public proxy lists are mostly dead or MITM-risky** — the
   health-checking above exists for a reason. Send nothing sensitive through a
   proxy you don't trust; prefer paid providers or your own relays.
+
+## Rendering JavaScript pages (`render`)
+
+Static HTTP cannot see content that only exists after JavaScript runs. The
+`render` option is the seam for that: inject a `Renderer` — "an expensive
+fetcher" that navigates a real browser engine, waits, and returns the final
+HTML. The engine is **injected, never bundled** — crawlio ships no browser.
+
+```ts
+import { createScraper } from "crawlio";
+import { playwrightRenderer } from "crawlio/render";
+
+const renderer = playwrightRenderer({
+  channel: "chrome",        // branded channel — or executablePath: "/path/to/browser"
+  waitUntil: "networkidle", // default "load"
+});
+const scraper = createScraper({ render: renderer }); // renderMode: "auto" is the default
+
+const page = await scraper.scrape("https://spa.example.com", { title: "h1" });
+await renderer.close(); // the browser is yours to close
+```
+
+`playwrightRenderer` needs `playwright-core` (`pnpm add playwright-core`) —
+an optional peer dependency, imported lazily on the first render. `browser`
+(`"chromium"` | `"firefox"` | `"webkit"`), `executablePath`, `channel`,
+`headless`, `waitUntil`, and `timeoutMs` configure it; the browser launches
+lazily, is reused across renders, and each render runs in an ephemeral
+browser context. Or implement `Renderer` yourself — it is one method:
+`render(url, { timeout, signal, userAgent }) => { url, html, status? }`.
+
+`renderMode` (instance default or per call — the call wins):
+
+- **`"auto"` (default)** — static fetch first; render only when
+  `isLikelyDynamic(html)` flags a JS shell (empty app mount points, a
+  near-empty body with scripts, "enable JavaScript" noscript warnings) or, on
+  `scrape*` calls, when every extracted field came back `undefined`. A render
+  failure falls back to the static result — `auto` never makes a page worse.
+- **`"always"`** — skip the static fetch entirely; the renderer IS the fetch
+  and render failures propagate as the call's error.
+
+`FetchHtmlResult.rendered` is `true` when the render path answered — an
+honest signal of which path served, not a quality claim. robots.txt still
+gates the URL before either path fires, and rendered HTML flows through the
+normal parse/extract pipeline. `retries` applies to the static HTTP path
+only — a renderer call is one navigation, never retried. An injected `fetch`
+serves the static HTTP path and robots.txt only; the renderer is a separate
+engine and never sees it. `isLikelyDynamic` is also exported on its own
+— remember it is a hint, not a verdict (SSR pages carry framework markers
+while being fully populated).
+
+Honest limits:
+
+- **The engine owns its own context** — stealth headers, the cookie jar, and
+  proxy routing do NOT apply inside the browser, and browser-side cookies do
+  not flow back into the SDK's jar.
+- **A browser is not a challenge solver** — rendering does not defeat managed
+  bot challenges (Turnstile, Cloudflare interstitials) by itself.
+- **Rendering runs untrusted JavaScript** — the page's scripts execute in a
+  real browser on your machine. The adapter isolates each render in an
+  ephemeral context (no shared profile), but keep the engine patched and
+  prefer an isolated environment for hostile targets.
+- **Rendering is read-only** — navigate, wait, return HTML. Browser actions
+  (click/fill/type) are a non-goal and live in the sibling project.
 
 ## License
 
