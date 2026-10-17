@@ -474,7 +474,7 @@ Honest limits:
 
 The built-in adapters cover the common cases — this section is for custom
 adapters. Every external capability in crawlio is an object seam —
-injected, never bundled. The full inventory:
+injected, never bundled:
 
 | Seam | Interface | Where it's injected | Built-in adapters |
 | --- | --- | --- | --- |
@@ -483,71 +483,23 @@ injected, never bundled. The full inventory:
 | CAPTCHA solver | `{ solve(challenge) → CaptchaSolution }` | `createScraper({ solver })` | none — always yours |
 | Fetch | `typeof globalThis.fetch` | `createScraper({ fetch })`, per call, provider adapters | undici default |
 
-Programmatically, a custom adapter is just an object satisfying the
-interface — no registration, no base class:
+A custom adapter is just a plain object satisfying the interface — no
+registration, no base class:
 
 ```ts
 import { createScraper, search } from "crawlio";
 
-const provider = {
-  async search(query, { limit } = {}) {
-    const res = await fetch(`https://searx.example/search?q=${query}&format=json`);
-    return (await res.json()).results.map((r) => ({ url: r.url, title: r.title }));
-  },
-};
+const render = { async render(url) { return { url, html: await myEngine.render(url) }; } };
+const provider = { async search(q) { return [{ url: `https://hits.example/?q=${q}` }]; } };
+
+const scraper = createScraper({ render });
 await search("typed scraping sdk", { provider });
-
-const renderer = {
-  async render(url, { timeout } = {}) {
-    const html = await myBrowserPool.render(url, timeout);
-    return { url, html };
-  },
-  async close() { await myBrowserPool.drain(); },
-};
-const scraper = createScraper({ render: renderer });
 ```
 
-For the CLI, `--provider` and `--renderer` also accept a **module
-specifier** — `./my-provider.mjs` or `../adapter.js` (resolved against the
-cwd), an absolute path, a `file:` URL, or a package name resolvable from
-your project. The module must export the adapter object as `export
-default`, or under the conventional named export — `searchProvider` or
-`provider` for search, `renderer` for render (`export default` wins when
-both exist). An optional `close()` on a renderer runs on shutdown. A
-module that doesn't export the right shape fails with `ConfigError`
-naming the expected export.
-
-```js
-// my-provider.mjs
-export default {
-  async search(query, { limit } = {}) {
-    // ...return [{ url, title?, description? }]
-  },
-};
-
-// my-renderer.mjs — named export form
-export const renderer = {
-  async render(url, options) {
-    // ...return { url, html, status? }
-  },
-  async close() { /* optional — runs on shutdown */ },
-};
-```
-
-```sh
-crawlio search "typed scraping sdk" --provider ./my-provider.mjs
-crawlio scrape https://spa.example --render always --renderer ./my-renderer.mjs
-```
-
-`--api-key` only applies to built-in provider names — a provider module
-carries its own config. `--renderer` is mutually exclusive with
-`--engine`, the engine flags (`--browser`/`--channel`/`--executable-path`)
-and the settle flags (`--wait-for`/`--wait-ms`) for the same reason.
-
-Writing one? [docs/custom-adapters.md](docs/custom-adapters.md) is the
-deep dive — the full contracts, the semantics the SDK relies on,
-lifecycle and error conventions, packaging for the CLI, and testing
-advice. This section stays the quick reference.
+Writing one — or loading an adapter module into the CLI
+(`--provider`/`--renderer` take module specifiers)? Contracts, worked
+examples, packaging, and testing live in
+[docs/custom-adapters.md](docs/custom-adapters.md).
 
 ## License
 

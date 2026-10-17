@@ -195,6 +195,30 @@ export function webEngineRenderer(options: { headless?: boolean } = {}): WebEngi
 }
 ```
 
+#### Using it
+
+`webEngineRenderer` is a factory — call it and hand the object to
+`createScraper`:
+
+```ts
+import { createScraper } from "crawlio";
+
+const renderer = webEngineRenderer();
+const scraper = createScraper({ render: renderer });
+const page = await scraper.scrape("https://spa.example.com", { title: "h1" });
+await renderer.close(); // the browser is yours to close
+```
+
+`renderMode: "auto"` (the default) fires the engine only when the static
+fetch looks dynamic; `"always"` makes the renderer the fetch itself.
+
+Or from the CLI — the module form needs the renderer **object** export
+(see [Packaging for the CLI](#packaging-for-the-cli) below):
+
+```sh
+crawlio scrape https://spa.example --render always --renderer ./my-renderer.mjs
+```
+
 ## The `SearchProvider` contract
 
 ```ts
@@ -327,6 +351,25 @@ export function acmeSearchProvider(options: {
     },
   };
 }
+```
+
+#### Using it
+
+`acmeSearchProvider` is a factory — call it and hand the object to
+`search`:
+
+```ts
+import { search } from "crawlio";
+
+const provider = acmeSearchProvider(); // or { apiKey: "..." } — else ACME_API_KEY
+const results = await search("typed scraping sdk", { provider, limit: 10 });
+```
+
+Or from the CLI — the module form needs the provider **object** export
+(see [Packaging for the CLI](#packaging-for-the-cli) below):
+
+```sh
+crawlio search "typed scraping sdk" --provider ./my-provider.mjs
 ```
 
 ## Packaging for the CLI
