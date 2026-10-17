@@ -236,6 +236,25 @@ export interface CaptchaSolution {
 }
 
 /**
+ * How a {@link FetchHtmlOptions.proxies} pool hands out proxies.
+ *
+ * - `"per-origin"` (default) — each target origin binds to one proxy on first
+ *   touch (round-robin across the pool) and keeps it. Session consistency is
+ *   the point: cookies and solved clearances (a `cf_clearance` is bound to
+ *   the issuing IP) stay valid only while the origin exits through the same
+ *   IP.
+ * - `"per-request"` — round-robin on every wire request.
+ *   **Warning:** consecutive requests to one origin leave through different
+ *   IPs — cookie jars, referer chains, and solved clearances stop telling a
+ *   coherent story. Use only for stateless fan-out.
+ * - `"on-ban"` — `per-origin` plus health: the origin's proxy is reassigned
+ *   on ban signals (transport failure, HTTP 407/403/429, a detected challenge
+ *   page, or a timeout). A proxy that fails 3 times in a row is quarantined
+ *   for ~5 minutes and skipped until the cooldown expires.
+ */
+export type ProxyRotation = "per-origin" | "per-request" | "on-ban";
+
+/**
  * Pluggable CAPTCHA solver.
  *
  * The SDK ships NO built-in solver: solving is delegated to user-provided
@@ -338,6 +357,33 @@ export interface FetchHtmlOptions {
   signal?: AbortSignal;
   /** Injected fetch implementation (useful for tests). */
   fetch?: typeof globalThis.fetch;
+  /**
+   * Route this request through one pinned proxy:
+   * `http://[user:pass@]host:port`. The per-call escape hatch — wins over
+   * {@link FetchHtmlOptions.proxies} and any instance-level proxy config.
+   *
+   * Credentials travel inside the URL (typically composed from environment
+   * variables) and are never logged. SOCKS URLs are not supported in v1 —
+   * inject a SOCKS-capable client via {@link FetchHtmlOptions.fetch} instead.
+   * Cannot be combined with an injected `fetch` — that throws
+   * {@link ConfigError}: a custom fetch cannot be routed through a proxy
+   * dispatcher.
+   */
+  proxy?: string;
+  /**
+   * Route requests through a proxy pool (see {@link proxyRotation} for the
+   * strategy). On a scraper instance (`ScraperOptions.proxies`) the pool is
+   * stateful — origin bindings and proxy health are shared across calls.
+   * **Per call, `proxies` builds a fresh stateless pool for that request** —
+   * health tracking cannot carry over, so only `proxy` makes much sense
+   * per-call.
+   *
+   * Same rules as {@link FetchHtmlOptions.proxy}: http(s) URLs only, no
+   * SOCKS, and cannot be combined with an injected `fetch` ({@link ConfigError}).
+   */
+  proxies?: string[];
+  /** Rotation strategy for {@link FetchHtmlOptions.proxies}. Default `"per-origin"`. */
+  proxyRotation?: ProxyRotation;
 }
 
 /** The decoded result of a single fetched page. */
@@ -397,6 +443,22 @@ export interface ScraperOptions {
   concurrency?: number;
   /** Injected fetch implementation (useful for tests). */
   fetch?: typeof globalThis.fetch;
+  /**
+   * Instance default for {@link FetchHtmlOptions.proxy} — pin every request
+   * through one proxy. Cannot be combined with an injected `fetch`.
+   */
+  proxy?: string;
+  /**
+   * Instance default for {@link FetchHtmlOptions.proxies}: a stateful proxy
+   * pool shared across every call on this scraper — origin bindings and
+   * proxy-health state live here, which is what makes {@link proxyRotation}
+   * (especially `"on-ban"`) useful. Cannot be combined with an injected
+   * `fetch` — a custom fetch cannot be routed through a proxy dispatcher;
+   * pass a proxy-aware `fetch` (e.g. built on undici's `ProxyAgent`) instead.
+   */
+  proxies?: string[];
+  /** Instance default for {@link FetchHtmlOptions.proxyRotation}. */
+  proxyRotation?: ProxyRotation;
 }
 
 /** A stateful scraper created by {@link createScraper}. */

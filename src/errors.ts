@@ -41,8 +41,10 @@ export function scrubUrl(url: string): string {
     parsed.password = "";
     return parsed.toString();
   } catch {
-    // Not a parseable URL — strip a leading `//user:pass@` textually.
-    return url.replace(/^([a-z][a-z0-9+.-]*:\/\/|\/\/)[^/?#@]*@/iu, "$1");
+    // Not a parseable URL — strip a leading `//user:pass@` textually. The
+    // match runs through the LAST `@` before the path, so a password that
+    // itself contains `@` (`user:p@ss@host`) leaves no fragment behind.
+    return url.replace(/^([a-z][a-z0-9+.-]*:\/\/|\/\/)[^/?#]*@/iu, "$1");
   }
 }
 

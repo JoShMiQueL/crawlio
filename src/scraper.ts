@@ -15,6 +15,7 @@ import { extract, extractAll } from "./extract.js";
 import { DEFAULT_RETRIES, DEFAULT_TIMEOUT, DEFAULT_USER_AGENT, fetchHtmlOnce } from "./fetch.js";
 import { mapImpl } from "./map.js";
 import { parseHtml } from "./parse.js";
+import { PROXY_FETCH_CONFLICT, ProxyPool, type ProxyPoolOptions } from "./proxy.js";
 import { fetchRobotsTxtResult, type RobotsAgent, robotsAllowed, robotsUrlFor } from "./robots.js";
 import {
   CookieJar,
@@ -45,6 +46,18 @@ import type {
 const DEFAULT_CONCURRENCY = 4;
 /** Crawl-delay is honoured but capped — a hostile delay must not stall the process. */
 const MAX_CRAWL_DELAY_MS = 30_000;
+
+/**
+ * Test seam, deliberately NOT declared on the public {@link ScraperOptions}:
+ * `__proxyPool` is forwarded verbatim to every {@link ProxyPool} this scraper
+ * builds, so tests can inject a `fetchFactory`/`now` (see
+ * {@link ProxyPoolOptions}) and drive scraper-level proxy behaviour — ban
+ * signals, origin bindings, the sitemap probe — without network. Set it via
+ * a cast; it is not public API and may change without notice.
+ */
+interface InternalScraperOptions extends ScraperOptions {
+  __proxyPool?: Pick<ProxyPoolOptions, "fetchFactory" | "now" | "banThreshold" | "cooldownMs">;
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -147,8 +160,31 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     stealth: options.stealth,
     solver: options.solver,
     fetch: options.fetch,
+    proxyRotation: options.proxyRotation ?? "per-origin",
   };
   const limit = pLimit(defaults.concurrency);
+  // Instance-level proxies build ONE stateful pool up front — origin bindings
+  // and proxy health are shared across every call on this scraper (that's
+  // what makes on-ban useful). Validation is eager: a bad proxy URL fails at
+  // createScraper, not mid-crawl. A custom `fetch` cannot be routed through
+  // a proxy dispatcher, so combining the two is a config error — the same
+  // check runs per call in fetchHtmlImpl for per-call combinations.
+  const instanceProxyList = options.proxy !== undefined ? [options.proxy] : options.proxies;
+  if (instanceProxyList !== undefined && options.fetch !== undefined) {
+    throw new ConfigError(PROXY_FETCH_CONFLICT);
+  }
+  // Internal test seam — see InternalScraperOptions. Forwarded to every pool
+  // the scraper builds (instance and per-call) so rotation, health and the
+  // sitemap probe all run on the injected factory.
+  const proxyPoolHooks = (options as InternalScraperOptions).__proxyPool;
+  const instancePool =
+    instanceProxyList === undefined
+      ? null
+      : new ProxyPool({
+          proxies: instanceProxyList,
+          rotation: defaults.proxyRotation,
+          ...proxyPoolHooks,
+        });
   // Both maps grow by one entry per origin seen and are never evicted — a
   // long-lived scraper crawling many origins leaks slowly. Acceptable for v1;
   // follow-up is a bound (LRU/eviction or an explicit `close()` that clears).
@@ -182,6 +218,11 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
       throwOnHttpError: call?.throwOnHttpError ?? true,
       signal: call?.signal,
       fetch: call?.fetch ?? defaults.fetch,
+      // `proxy`/`proxies` are deliberately NOT merged here: they are consumed
+      // at this layer (proxy-pool resolution) and must never ride `...merged`
+      // into fetchHtmlOnce, which builds its own stateless pool when it sees
+      // them (it supports them for direct callers).
+      proxyRotation: call?.proxyRotation ?? defaults.proxyRotation,
       baseUrl: (call as ScrapeOptions | undefined)?.baseUrl,
       parseOptions: (call as ScrapeOptions | undefined)?.parseOptions,
       concurrency: (call as ScrapeOptions | undefined)?.concurrency,
@@ -285,7 +326,24 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     const stealth = resolveStealth(merged.stealth);
     const explicitUserAgent = call?.userAgent ?? options.userAgent;
     const userAgent = wireUserAgent(explicitUserAgent, stealth);
-    const effectiveFetch = merged.fetch ?? fetchImpl;
+    // Proxy resolution happens once per call. A per-call `proxy`/`proxies`
+    // builds a FRESH stateless pool for this request — health state cannot
+    // survive the call — while instance-level config shares the scraper's
+    // pool (bindings + health persist). `proxy` pins one proxy and wins over
+    // `proxies` at the same level.
+    const callProxyList = call?.proxy !== undefined ? [call.proxy] : call?.proxies;
+    const proxyPool =
+      callProxyList === undefined
+        ? instancePool
+        : new ProxyPool({
+            proxies: callProxyList,
+            rotation: merged.proxyRotation,
+            ...proxyPoolHooks,
+          });
+    if (proxyPool !== null && merged.fetch !== undefined) {
+      throw new ConfigError(PROXY_FETCH_CONFLICT, { url: target.toString() });
+    }
+    const effectiveFetch = proxyPool?.fetchFor(origin) ?? merged.fetch ?? fetchImpl;
     // p-retry short-circuits a pre-aborted signal with a raw AbortError; wrap it
     // here so every error leaving the SDK is a ScrapeError (see errors.ts).
     if (merged.signal?.aborted) {
@@ -410,15 +468,24 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     const solverConfigured = merged.solver !== undefined;
 
     /**
-     * Re-apply `throwOnHttpError` semantics for the solver path: with a solver
-     * configured, responses are fetched with throwing suppressed so a
-     * challenge body's markers can be inspected — a still-failing response
-     * must surface as the same {@link HttpError} it would have without a
-     * solver.
+     * `throwOnHttpError` is suppressed whenever an error-status body must be
+     * inspected above the fetch layer: a solver needs the challenge data, and
+     * a proxy pool needs the challenge page itself as a ban signal — letting
+     * HttpError throw inside fetchHtmlOnce would record a 503 challenge as
+     * proxy SUCCESS (503 is deliberately not a ban status) and skip
+     * `reportBan` entirely. `finalize` then re-throws the HttpError the
+     * caller would have seen.
+     */
+    const inspectErrorBodies = solverConfigured || proxyPool !== null;
+
+    /**
+     * Re-apply `throwOnHttpError` semantics once the body has been inspected
+     * (solver path, or pool challenge attribution): a still-failing response
+     * surfaces as the same {@link HttpError} it would have thrown eagerly.
      */
     const finalize = (result: FetchHtmlResult): FetchHtmlResult => {
       if (
-        solverConfigured &&
+        inspectErrorBodies &&
         merged.throwOnHttpError !== false &&
         (result.status < 200 || result.status >= 300)
       ) {
@@ -441,29 +508,58 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
      * also spans p-retry attempts).
      */
     const attemptOnce = async (): Promise<FetchHtmlResult> => {
-      const result = await fetchHtmlOnce(
-        target.toString(),
-        {
-          ...merged,
-          userAgent: explicitUserAgent,
-          headers: wireHeaders(),
-          // Suppress HttpError only while a solver may need the body.
-          throwOnHttpError: solverConfigured ? false : merged.throwOnHttpError,
-        },
-        effectiveFetch,
-      );
+      let result: FetchHtmlResult;
+      try {
+        result = await fetchHtmlOnce(
+          target.toString(),
+          {
+            ...merged,
+            userAgent: explicitUserAgent,
+            headers: wireHeaders(),
+            // Suppress HttpError while a solver or the proxy pool may need
+            // the error-status body (challenge detection → reportBan).
+            throwOnHttpError: inspectErrorBodies ? false : merged.throwOnHttpError,
+          },
+          effectiveFetch,
+        );
+      } catch (error) {
+        // A timeout through a proxy counts against the proxy that served it —
+        // the pool's wrapper cannot tell a timeout abort from a caller abort,
+        // but this layer can: TimeoutError means OUR clock fired. A
+        // caller-abort FetchError is never a proxy fault.
+        if (proxyPool !== null && error instanceof TimeoutError) {
+          proxyPool.reportBan(origin);
+        }
+        throw error;
+      }
       recordResponse(result);
 
-      if (!solverConfigured || solverAttempted) return finalize(result);
+      // Challenge detection runs whenever someone can act on it: a solver
+      // needs the challenge data, a proxy pool needs the ban signal (a served
+      // challenge page marks the proxy as burned for this origin).
+      const challenge = inspectErrorBodies
+        ? detectChallenge({
+            url: result.url,
+            status: result.status,
+            headers: result.headers,
+            html: result.html,
+          })
+        : null;
+      if (
+        challenge !== null &&
+        proxyPool !== null &&
+        (challenge.type === "cloudflare-interstitial" || result.status >= 400)
+      ) {
+        // Interstitials are always blocks; widget markers only count on error
+        // statuses — a captcha widget embedded in a 200 form page is content,
+        // not a ban. (403/503-status challenges already recorded by the
+        // status path are deduplicated inside reportBan.)
+        proxyPool.reportBan(origin);
+      }
+
+      if (!solverConfigured || solverAttempted || challenge === null) return finalize(result);
       const solver = merged.solver;
       if (solver === undefined) return finalize(result);
-      const challenge = detectChallenge({
-        url: result.url,
-        status: result.status,
-        headers: result.headers,
-        html: result.html,
-      });
-      if (challenge === null) return finalize(result);
       solverAttempted = true;
 
       let solution: CaptchaSolution;
@@ -681,14 +777,47 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     // fetchHtmlImpl, so the resolved instance defaults must reach it here —
     // a per-call `undefined` would fall back to the global fetch instead of
     // this scraper's own.
-    map: (url, opts) => {
+    // async so config failures (bad proxy URL, proxy+fetch conflict) REJECT
+    // the promise instead of throwing synchronously out of a Promise-typed
+    // handler.
+    map: async (url, opts) => {
       const merged = mergedOptions(opts);
+      // Same proxy resolution as fetchHtmlImpl so the sitemap/robots probe —
+      // which bypasses the fetch pipeline — exits through the same proxy as
+      // the page fetches (going direct would leak the real IP and could see
+      // a different robots.txt than the pages).
+      const callProxyList = opts?.proxy !== undefined ? [opts.proxy] : opts?.proxies;
+      const probePool =
+        callProxyList === undefined
+          ? instancePool
+          : new ProxyPool({
+              proxies: callProxyList,
+              rotation: merged.proxyRotation,
+              ...proxyPoolHooks,
+            });
+      let sitemapProbeFetch = merged.fetch ?? fetchImpl;
+      if (probePool !== null) {
+        if (merged.fetch !== undefined) {
+          throw new ConfigError(PROXY_FETCH_CONFLICT);
+        }
+        try {
+          sitemapProbeFetch = probePool.fetchFor(new URL(String(url)).origin);
+        } catch {
+          // Unparseable seed URL — mapImpl raises the ConfigError itself.
+        }
+      }
       return mapImpl(fetchHtmlImpl, url, {
         ...opts,
         robots: merged.robots,
         timeout: merged.timeout,
         signal: merged.signal,
-        fetch: merged.fetch ?? fetchImpl,
+        // Page fetches must see the RAW `fetch` (undefined unless the caller
+        // injected one): handing them our resolved fallback would trip the
+        // proxy/fetch conflict check inside fetchHtmlImpl. The probe is the
+        // only consumer that needs the resolved default, so it gets its own
+        // field instead.
+        fetch: merged.fetch,
+        sitemapProbeFetch,
         // `userAgent` deliberately stays whatever the caller passed (via the
         // spread above): injecting the resolved default would suppress
         // fetchHtmlImpl's stealth-profile UA fallback while the profile's

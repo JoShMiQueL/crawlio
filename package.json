@@ -28,7 +28,7 @@
   "type": "module",
   "packageManager": "pnpm@12.14.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.19"
   },
   "files": [
     "dist"
@@ -69,6 +69,7 @@
     "cheerio": "^1.2.0",
     "p-limit": "^7.3.3",
     "p-retry": "^8.0.1",
-    "robots-parser": "^3.0.1"
+    "robots-parser": "^3.0.1",
+    "undici": "8.12.2"
   }
 }

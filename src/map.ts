@@ -12,9 +12,17 @@ import type { MapEntry, MapOptions, MapResult, Scraper } from "./types.js";
  * → instance default → stealth profile → honest default) — the scraper hands
  * it the wire UA explicitly so robots.txt sees the same agent the page
  * fetches will send. Direct callers can omit it; `userAgent` is the fallback.
+ *
+ * `sitemapProbeFetch` is the same seam for the transport: the robots.txt
+ * probe uses it instead of `options.fetch` — the scraper hands it the
+ * proxy-bound fetch when proxies are configured, so the probe doesn't leak
+ * the real IP. It is stripped off `fetchOptions` before those reach the page
+ * fetches (a resolved fetch would otherwise trip the proxy/fetch conflict
+ * check inside the pipeline).
  */
 export interface MapImplOptions extends MapOptions {
   sitemapProbeUserAgent?: string;
+  sitemapProbeFetch?: typeof globalThis.fetch;
 }
 
 /**
@@ -51,7 +59,7 @@ export async function mapImpl(
 ): Promise<MapResult> {
   // The probe UA is consumed here and never forwarded — fetchHtml resolves
   // the wire UA itself, and an extra field would just ride along ignored.
-  const { sitemapProbeUserAgent, ...fetchOptions } = options;
+  const { sitemapProbeUserAgent, sitemapProbeFetch, ...fetchOptions } = options;
   let seed: URL;
   try {
     seed = new URL(String(url));
@@ -82,7 +90,7 @@ export async function mapImpl(
     const agent = await fetchRobotsTxt(robotsUrlFor(seed.toString()), {
       userAgent: sitemapProbeUserAgent ?? options.userAgent,
       timeout: options.timeout,
-      fetch: options.fetch,
+      fetch: sitemapProbeFetch ?? options.fetch,
       signal: options.signal,
     });
     for (const loc of agent?.getSitemaps() ?? []) {

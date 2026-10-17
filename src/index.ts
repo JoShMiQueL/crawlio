@@ -18,6 +18,8 @@ export {
 export { extract, extractAll } from "./extract.js";
 export { DEFAULT_RETRIES, DEFAULT_TIMEOUT, DEFAULT_USER_AGENT, fetchHtmlOnce } from "./fetch.js";
 export { parseHtml } from "./parse.js";
+export type { ProxyFetchFactory, ProxyPoolOptions } from "./proxy.js";
+export { ProxyPool } from "./proxy.js";
 export type { RobotsAgent } from "./robots.js";
 export { fetchRobotsTxt, parseRobots, robotsAllowed, robotsUrlFor } from "./robots.js";
 export {
@@ -49,6 +51,7 @@ export type {
   MapOptions,
   MapResult,
   ParseOptions,
+  ProxyRotation,
   RequestDelay,
   ScrapeBatchItem,
   ScrapeOptions,

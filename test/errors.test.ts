@@ -211,6 +211,15 @@ describe("scrubUrl", () => {
     expect(scrubUrl("https://user:pass@")).toBe("https://");
   });
 
+  it("strips through the LAST @ so a password containing @ leaves no fragment", () => {
+    // `new URL` rejects this (invalid port), so the textual fallback runs —
+    // matching only up to the first `@` would leak `ss@` of `p@ss`.
+    expect(scrubUrl("http://user:p@ss@host:port trailing")).toBe("http://host:port trailing");
+    expect(scrubUrl("http://user:p@ss@host/path")).toBe("http://host/path");
+    // An `@` in the path must NOT trigger stripping.
+    expect(scrubUrl("http://host/p@th")).toBe("http://host/p@th");
+  });
+
   it("leaves credential-free values untouched", () => {
     expect(scrubUrl("https://shop.example.com/x")).toBe("https://shop.example.com/x");
   });

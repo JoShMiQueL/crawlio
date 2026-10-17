@@ -17,7 +17,7 @@ in your own process, not a hosted service.
 | CAPTCHA solver seam — user-provided `solve` interface | done |
 | `map` — discover all URLs on a site | done |
 | `crawl` — recursive same-site traversal | done |
-| Proxies — pluggable per-request routing | planned |
+| Proxies — pool routing with rotation and ban-aware health checks | done |
 | `render` seam + `isLikelyDynamic` — headless engine injection for JS pages | planned |
 | `search` — via external search providers | planned |
 | MCP server — expose the toolkit to agents | planned |
@@ -40,7 +40,7 @@ pnpm add crawlio
 npm i crawlio
 ```
 
-Requires Node.js >= 22.
+Requires Node.js >= 22.19.
 
 ## Usage
 
@@ -163,12 +163,67 @@ Honest ceiling — stealth here is headers, cookies, and timing. It does NOT:
 - mimic TLS (JA3) or HTTP/2 fingerprints — those belong to the transport;
   inject an impersonating client via the `fetch` option;
 - execute JavaScript — challenges that need a real browser still need one;
-- fix IP reputation — that needs proxies, which are out of scope.
+- fix IP reputation — that's what proxies are for (see below).
 
 Solver services are external and usually paid; API keys live inside your own
 `solve` implementation, never in SDK config. A solved challenge is not a
 guarantee of access. Using stealth is your responsibility — respect the target
 site's terms and applicable law.
+
+## Proxies
+
+Route requests through HTTP(S) proxies — pin one, or pool several:
+
+```ts
+const scraper = createScraper({
+  proxies: [
+    process.env.PROXY_A as string, // e.g. "http://user:pass@1.2.3.4:8080"
+    process.env.PROXY_B as string,
+  ],
+  proxyRotation: "on-ban", // default "per-origin"
+});
+
+// Per-call escape hatch — pin a single proxy for this request:
+await scraper.fetchHtml("https://example.com", { proxy: process.env.PROXY_A });
+```
+
+Rotation strategies (`proxyRotation`):
+
+- **`"per-origin"`** (default) — each target origin binds to one proxy on
+  first touch and keeps it. Session consistency matters: a `cf_clearance` is
+  bound to the IP that issued it, so cookies only stay valid while the origin
+  exits through the same proxy.
+- **`"per-request"`** — round-robin on every wire request. **Warning:** this
+  breaks session consistency — consecutive requests to one origin leave
+  through different IPs, so cookie jars and referer chains stop telling a
+  coherent story. Stateless fan-out only.
+- **`"on-ban"`** — `per-origin` plus health: the origin's proxy is reassigned
+  on ban signals (transport failure, HTTP 407/403/429, a detected challenge
+  page, or a timeout). A proxy that fails 3 times in a row is quarantined for
+  ~5 minutes and skipped; if every proxy is quarantined, the earliest-expiring
+  one serves anyway — a dead pool still tries.
+
+Instance-level `proxies` builds one **stateful** pool whose health state is
+shared across calls — that's what makes `on-ban` useful. A per-call `proxies`
+builds a fresh **stateless** pool for that request, so `proxy` is the
+sensible per-call option.
+
+Rules and honest caveats:
+
+- **Credentials** live only in the proxy URL (`http://user:pass@host:port`),
+  typically composed from environment variables as above — never hardcoded,
+  never logged; error messages scrub them.
+- **`proxy`/`proxies` can't be combined with an injected `fetch`** — a custom
+  fetch can't be routed through a proxy dispatcher, so the combination throws
+  `ConfigError`. For transports the SDK can't drive (impersonating TLS
+  clients, custom proxy logic), pass a proxy-aware `fetch` instead.
+- **SOCKS is not supported in v1** — `socks:`/`socks5:` URLs throw
+  `ConfigError`. undici 8's `ProxyAgent` can drive SOCKS natively, but it
+  stays off until it has real SOCKS-server coverage; inject a SOCKS-capable
+  client via `fetch` instead.
+- **Free public proxy lists are mostly dead or MITM-risky** — the
+  health-checking above exists for a reason. Send nothing sensitive through a
+  proxy you don't trust; prefer paid providers or your own relays.
 
 ## License
 
