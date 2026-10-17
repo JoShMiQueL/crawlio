@@ -246,12 +246,27 @@ const page = await scraper.scrape("https://spa.example.com", { title: "h1" });
 await renderer.close(); // the browser is yours to close
 ```
 
-`playwrightRenderer` needs `playwright-core` (`pnpm add playwright-core`) —
-an optional peer dependency, imported lazily on the first render. `browser`
-(`"chromium"` | `"firefox"` | `"webkit"`), `executablePath`, `channel`,
-`headless`, `waitUntil`, and `timeoutMs` configure it; the browser launches
-lazily, is reused across renders, and each render runs in an ephemeral
-browser context. Or implement `Renderer` yourself — it is one method:
+Two official adapters ship as subpath exports, each backed by an optional
+peer dependency imported lazily on the first render:
+
+- **`crawlio/render` — Playwright** (`pnpm add playwright-core`). `browser`
+  (`"chromium"` | `"firefox"` | `"webkit"`), `executablePath`, `channel`,
+  `headless`, `waitUntil`, and `timeoutMs` configure it.
+- **`crawlio/puppeteer` — Puppeteer** (`pnpm add puppeteer-core`, `>=24.21`). Same
+  shape minus `browser` (Puppeteer is Chrome-only): `executablePath`,
+  `channel` (`"chrome"`, `"chrome-beta"`, ...), `headless`, `waitUntil`
+  (Puppeteer names: `"networkidle0"` / `"networkidle2"`, not `"networkidle"`),
+  and `timeoutMs`.
+
+```ts
+import { puppeteerRenderer } from "crawlio/puppeteer";
+const renderer = puppeteerRenderer({ channel: "chrome", waitUntil: "networkidle2" });
+```
+
+Both share the same lifecycle: the browser launches lazily, is reused across
+renders, each render runs in an ephemeral browser context, and `close()` is
+yours to call. Any other engine works too — implement `Renderer` yourself,
+it is one method:
 `render(url, { timeout, signal, userAgent }) => { url, html, status? }`.
 
 `renderMode` (instance default or per call — the call wins):

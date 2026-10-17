@@ -44,6 +44,10 @@
       "types": "./dist/render/playwright.d.ts",
       "default": "./dist/render/playwright.js"
     },
+    "./puppeteer": {
+      "types": "./dist/render/puppeteer.d.ts",
+      "default": "./dist/render/puppeteer.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -67,6 +71,7 @@
     "@types/node": "^26.0.0",
     "playwright-core": "^1.64.1",
     "publint": "^0.3.25",
+    "puppeteer-core": "25.13.0",
     "typescript": "^5.9.3",
     "vitest": "^5.0.5"
   },
@@ -78,10 +83,14 @@
     "undici": "8.12.2"
   },
   "peerDependencies": {
-    "playwright-core": ">=1.40"
+    "playwright-core": ">=1.40",
+    "puppeteer-core": ">=24.21"
   },
   "peerDependenciesMeta": {
     "playwright-core": {
+      "optional": true
+    },
+    "puppeteer-core": {
       "optional": true
     }
   }
