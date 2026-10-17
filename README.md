@@ -234,7 +234,7 @@ HTML. The engine is **injected, never bundled** — crawlio ships no browser.
 
 ```ts
 import { createScraper } from "crawlio";
-import { playwrightRenderer } from "crawlio/render";
+import { playwrightRenderer } from "crawlio/playwright";
 
 const renderer = playwrightRenderer({
   channel: "chrome",        // branded channel — or executablePath: "/path/to/browser"
@@ -249,7 +249,7 @@ await renderer.close(); // the browser is yours to close
 Two official adapters ship as subpath exports, each backed by an optional
 peer dependency imported lazily on the first render:
 
-- **`crawlio/render` — Playwright** (`pnpm add playwright-core`). `browser`
+- **`crawlio/playwright` — Playwright** (`pnpm add playwright-core`). `browser`
   (`"chromium"` | `"firefox"` | `"webkit"`), `executablePath`, `channel`,
   `headless`, `waitUntil`, and `timeoutMs` configure it.
 - **`crawlio/puppeteer` — Puppeteer** (`pnpm add puppeteer-core`, `>=24.21`). Same

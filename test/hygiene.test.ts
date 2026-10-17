@@ -36,7 +36,7 @@ describe("test source hygiene", () => {
   it("imports the public surface from ../src/index.js", () => {
     // Sanctioned submodule imports: src/errors.js holds the internal
     // scrubUrl() helper that is deliberately not part of the public API, and
-    // src/render/*.js are the `crawlio/render` and `crawlio/puppeteer`
+    // src/render/*.js are the `crawlio/playwright` and `crawlio/puppeteer`
     // subpath exports — they cannot come through index.js because their peer
     // deps must stay optional.
     const allowed = new Set([

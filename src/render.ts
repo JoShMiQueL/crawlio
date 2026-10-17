@@ -43,7 +43,7 @@ export interface RenderedPage {
  *
  * A renderer is "an expensive fetcher": it navigates a real browser engine,
  * waits for the page to settle, and returns the final HTML. It is INJECTED,
- * never bundled — the SDK ships no browser engine. See `crawlio/render` and
+ * never bundled — the SDK ships no browser engine. See `crawlio/playwright` and
  * `crawlio/puppeteer` for the optional Playwright and Puppeteer adapters, or
  * implement this interface over your own engine (a remote browser pool, ...).
  *

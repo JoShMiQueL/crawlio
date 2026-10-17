@@ -40,7 +40,7 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./render": {
+    "./playwright": {
       "types": "./dist/render/playwright.d.ts",
       "default": "./dist/render/playwright.js"
     },
