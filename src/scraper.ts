@@ -1,4 +1,3 @@
-import pLimit from "p-limit";
 import { detectChallenge } from "./captcha.js";
 import { crawlImpl } from "./crawl.js";
 import {
@@ -12,6 +11,7 @@ import {
 } from "./errors.js";
 import { extract, extractAll } from "./extract.js";
 import { DEFAULT_RETRIES, DEFAULT_TIMEOUT, DEFAULT_USER_AGENT, fetchHtmlOnce } from "./fetch.js";
+import { pLimit } from "./limit.js";
 import { mapImpl } from "./map.js";
 import { parseHtml } from "./parse.js";
 import { defaultFetch, PROXY_FETCH_CONFLICT, ProxyPool, type ProxyPoolOptions } from "./proxy.js";
@@ -63,8 +63,8 @@ interface InternalScraperOptions extends ScraperOptions {
 
 // Bun.sleep is the identical promise without the setTimeout wrapper — only
 // the scraper-level sleeps get the swap (requestDelay pacing, crawl-delay
-// waits, map pacing). p-retry's backoff keeps its own internal setTimeout
-// on both runtimes; it is not affected.
+// waits, map pacing). The retry backoff (src/retry.ts) keeps its own internal
+// setTimeout on both runtimes; it is not affected.
 const sleep = (ms: number): Promise<void> =>
   isBun ? Bun.sleep(ms) : new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -120,7 +120,7 @@ function isValidRequestDelay(delay: RequestDelay | undefined): boolean {
  * - a per-origin `robots.txt` cache (fetched once, deduplicated as a Promise);
  * - a per-origin serial queue, so one origin is never hit twice concurrently
  *   (bypassed when `serializePerOrigin` is false);
- * - a global `p-limit` concurrency cap wrapping the per-origin queues;
+ * - a global `limit` concurrency cap wrapping the per-origin queues;
  * - stealth state (per-origin cookie jar + last-visited-URL referer chain),
  *   only consulted on calls where `stealth` resolves on.
  *
@@ -295,7 +295,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
    * (unless `serializePerOrigin` is false).
    *
    * Composition order matters: the per-origin serial queue sits OUTSIDE the
-   * global `p-limit`, and the limit sits inside it. A task parked behind a busy
+   * global `limit`, and the limit sits inside it. A task parked behind a busy
    * origin's chain therefore holds NO global slot — the cap only binds while a
    * request is actually in flight. (The reverse order would let queued same-origin
    * tasks squat on global slots and starve other origins.)
@@ -344,8 +344,9 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
       throw new ConfigError(PROXY_FETCH_CONFLICT, { url: target.toString() });
     }
     const effectiveFetch = proxyPool?.fetchFor(origin) ?? merged.fetch ?? fetchImpl;
-    // p-retry short-circuits a pre-aborted signal with a raw AbortError; wrap it
-    // here so every error leaving the SDK is a ScrapeError (see errors.ts).
+    // The retry loop would surface a pre-aborted signal as its raw abort
+    // reason; wrap it here so every error leaving the SDK is a ScrapeError
+    // (see errors.ts).
     if (merged.signal?.aborted) {
       throw new FetchError("Request aborted by caller", {
         url: target.toString(),
@@ -362,8 +363,9 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
         { url: target.toString() },
       );
     }
-    // Validate here so p-retry's own TypeErrors never leak past the SDK
-    // boundary (every thrown error must be a ScrapeError).
+    // Validate here so a bad `retries` reaches the caller as a ConfigError,
+    // not a raw TypeError out of the retry loop — every thrown error must be
+    // a ScrapeError.
     if (merged.retries !== undefined && (!Number.isInteger(merged.retries) || merged.retries < 0)) {
       throw new ConfigError(`\`retries\` must be a non-negative integer, got ${merged.retries}`, {
         url: target.toString(),
@@ -541,7 +543,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
      * detected and a solver is configured — solve once and retry the SAME
      * request once with the returned credentials (`solverUsed` is the
      * never-infinite-retry guard: one solver attempt per call, and the guard
-     * also spans p-retry attempts).
+     * also spans retries).
      */
     const attemptOnce = async (): Promise<FetchHtmlResult> => {
       let result: FetchHtmlResult;
@@ -692,7 +694,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
          * surfaces as FetchError, a ScrapeError passes through, anything else
          * is wrapped in ConfigError so the taxonomy holds.
          *
-         * Deliberately NOT wrapped in `p-retry`: one navigation per render
+         * Deliberately NOT wrapped in the retry policy: one navigation per render
          * call — `retries` paces the static HTTP path only.
          */
         const renderOnce = async (): Promise<FetchHtmlResult> => {
@@ -912,7 +914,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
             return { url: scrubUrl(fetched.url), ok: true, data, status: fetched.status };
           } catch (error) {
             // A caller abort surfacing as a raw DOMException (e.g. thrown past
-            // the retry layer by p-retry's signal handling) is a FetchError,
+            // the retry layer by its raw-reason signal handling) is a FetchError,
             // not a ConfigError — same wrap as fetchHtmlImpl.
             const scrapeError =
               error instanceof ScrapeError
