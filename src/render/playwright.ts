@@ -1,5 +1,6 @@
 import { ConfigError } from "../errors.js";
 import type { RenderCallOptions, RenderedPage, Renderer } from "../render.js";
+import { lazyBrowser } from "./lifecycle.js";
 import {
   assertExecutablePathChannelExclusive,
   assertWaitForSelector,
@@ -8,7 +9,6 @@ import {
 
 /** The lazily-imported `playwright-core` module — a peer dep, never bundled. */
 type PlaywrightCore = typeof import("playwright-core");
-type Browser = import("playwright-core").Browser;
 
 /** Options for {@link playwrightRenderer}. */
 export interface PlaywrightRendererOptions {
@@ -146,26 +146,17 @@ export function playwrightRenderer(options: PlaywrightRendererOptions = {}): Pla
     }
   };
 
-  // Lazily launched on first render and reused; a FAILED launch is not
-  // cached, so a later render may retry (e.g. the peer dep got installed).
-  let browserPromise: Promise<Browser> | undefined;
-  const launch = (): Promise<Browser> => {
-    browserPromise ??= loadPlaywright()
-      .then((pw) =>
-        pw[browserName].launch({
-          headless,
-          ...(options.executablePath === undefined
-            ? {}
-            : { executablePath: options.executablePath }),
-          ...(options.channel === undefined ? {} : { channel: options.channel }),
-        }),
-      )
-      .catch((error: unknown) => {
-        browserPromise = undefined;
-        throw error;
-      });
-    return browserPromise;
-  };
+  // Lazily launched on first render and reused across calls — see
+  // {@link lazyBrowser} for the shared lifecycle contract.
+  const { launch, close } = lazyBrowser(() =>
+    loadPlaywright().then((pw) =>
+      pw[browserName].launch({
+        headless,
+        ...(options.executablePath === undefined ? {} : { executablePath: options.executablePath }),
+        ...(options.channel === undefined ? {} : { channel: options.channel }),
+      }),
+    ),
+  );
 
   return {
     async render(url, call) {
@@ -220,14 +211,6 @@ export function playwrightRenderer(options: PlaywrightRendererOptions = {}): Pla
         await context.close();
       }
     },
-    async close() {
-      const pending = browserPromise;
-      browserPromise = undefined;
-      if (pending === undefined) return;
-      // A still-in-flight launch is closed once it resolves; a rejected
-      // launch has nothing to close.
-      const browser = await pending.catch(() => undefined);
-      await browser?.close();
-    },
+    close,
   };
 }

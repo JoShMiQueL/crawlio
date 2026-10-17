@@ -1,5 +1,6 @@
 import { ConfigError } from "../errors.js";
 import type { RenderCallOptions, RenderedPage, Renderer } from "../render.js";
+import { lazyBrowser } from "./lifecycle.js";
 import {
   assertExecutablePathChannelExclusive,
   assertWaitForSelector,
@@ -8,7 +9,6 @@ import {
 
 /** The lazily-imported `puppeteer-core` module — a peer dep, never bundled. */
 type PuppeteerCore = typeof import("puppeteer-core");
-type Browser = import("puppeteer-core").Browser;
 type ChromeReleaseChannel = import("puppeteer-core").ChromeReleaseChannel;
 
 /** Options for {@link puppeteerRenderer}. */
@@ -157,32 +157,23 @@ export function puppeteerRenderer(options: PuppeteerRendererOptions = {}): Puppe
     }
   };
 
-  // Lazily launched on first render and reused; a FAILED launch is not
-  // cached, so a later render may retry (e.g. the peer dep got installed).
-  let browserPromise: Promise<Browser> | undefined;
-  const launch = (): Promise<Browser> => {
-    browserPromise ??= loadPuppeteer()
-      .then((pp) =>
-        pp.launch({
-          headless,
-          ...(options.executablePath === undefined
-            ? {}
-            : { executablePath: options.executablePath }),
-          // `channel` stays `string` on the public options (same contract
-          // as the playwright adapter) but is validated eagerly above
-          // against puppeteer-core's closed release-channel union — the
-          // cast is checked, not blind.
-          ...(options.channel === undefined
-            ? {}
-            : { channel: options.channel as ChromeReleaseChannel }),
-        }),
-      )
-      .catch((error: unknown) => {
-        browserPromise = undefined;
-        throw error;
-      });
-    return browserPromise;
-  };
+  // Lazily launched on first render and reused across calls — see
+  // {@link lazyBrowser} for the shared lifecycle contract.
+  const { launch, close } = lazyBrowser(() =>
+    loadPuppeteer().then((pp) =>
+      pp.launch({
+        headless,
+        ...(options.executablePath === undefined ? {} : { executablePath: options.executablePath }),
+        // `channel` stays `string` on the public options (same contract
+        // as the playwright adapter) but is validated eagerly above
+        // against puppeteer-core's closed release-channel union — the
+        // cast is checked, not blind.
+        ...(options.channel === undefined
+          ? {}
+          : { channel: options.channel as ChromeReleaseChannel }),
+      }),
+    ),
+  );
 
   return {
     async render(url, call) {
@@ -251,14 +242,6 @@ export function puppeteerRenderer(options: PuppeteerRendererOptions = {}): Puppe
         await closeContext();
       }
     },
-    async close() {
-      const pending = browserPromise;
-      browserPromise = undefined;
-      if (pending === undefined) return;
-      // A still-in-flight launch is closed once it resolves; a rejected
-      // launch has nothing to close.
-      const browser = await pending.catch(() => undefined);
-      await browser?.close();
-    },
+    close,
   };
 }

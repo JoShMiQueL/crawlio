@@ -194,7 +194,7 @@ the library API.
 crawlio scrape <url> [--fields 'title=h1;links=a.href@all'] [--render auto|always] [--json]
 crawlio map <url> [--limit N]
 crawlio crawl <url> [--max-depth N] [--max-pages N]
-crawlio search <query> [--provider brave|serper|tavily] [--api-key <key>] [--limit N] [--json]
+crawlio search <query> [--provider <name|module>] [--api-key <key>] [--limit N] [--json]
 crawlio install [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--dry-run]
 crawlio --help | --version
 ```
@@ -224,15 +224,23 @@ crawlio --help | --version
   puppeteer `--channel` defaults to `"chrome"` — puppeteer-core resolves no
   browser without one — covering both a system Chrome and `crawlio
   install`'s `puppeteer browsers install chrome` download.
-  `--engine`/`--browser`/`--channel`/`--executable-path`/`--wait-for`/
-  `--wait-ms` all require `--render` and error out without it.
+  `--renderer <module>` loads a custom renderer module instead of a
+  built-in engine (mutually exclusive with `--engine`/`--browser`/
+  `--channel`/`--executable-path`/`--wait-for`/`--wait-ms`).
+  `--engine`/`--renderer`/`--browser`/`--channel`/`--executable-path`/
+  `--wait-for`/`--wait-ms` all require `--render` and error out without
+  it.
 - **`map`/`crawl`** print their JSON result (`--limit`, `--max-depth`,
   `--max-pages` map to the library options).
 - **`search`** queries a search provider and prints the hits (`--limit`
-  caps them). `--provider brave|serper|tavily` (default `brave`) picks the
-  adapter; the key comes from the provider's env var (`BRAVE_API_KEY`,
-  `SERPER_API_KEY`, `TAVILY_API_KEY`) or `--api-key <key>`, which overrides
-  it.
+  caps them). `--provider` takes a built-in name (`brave`, `serper`,
+  `tavily`) or a module specifier for a custom provider (see
+  [Custom providers and renderers](#custom-providers-and-renderers)).
+  Without `--provider` the CLI auto-detects from the API-key env vars —
+  `BRAVE_API_KEY` → `SERPER_API_KEY` → `TAVILY_API_KEY`, in that order;
+  zero set is an error naming all three. `--api-key <key>` overrides the
+  env var for built-in names (rejected for provider modules — they carry
+  their own config).
 - **`install`** detects the package manager (`packageManager` manifest
   field → lockfile sniff → npm fallback; npm, pnpm, bun and yarn are
   recognized) and dev-installs `playwright-core` or `puppeteer-core`
@@ -459,6 +467,79 @@ Honest limits:
   prefer an isolated environment for hostile targets.
 - **Rendering is read-only** — navigate, wait, return HTML. Browser actions
   (click/fill/type) are a non-goal and live in the sibling project.
+
+## Custom providers and renderers
+
+Every external capability in crawlio is an object seam — injected, never
+bundled. The full inventory:
+
+| Seam | Interface | Where it's injected | Built-in adapters |
+| --- | --- | --- | --- |
+| Renderer | `{ render(url, options?) → RenderedPage }` (+ optional `close()`) | `createScraper({ render })` | `playwrightRenderer`, `puppeteerRenderer` |
+| Search provider | `{ search(query, options?) → SearchResult[] }` | `search(q, { provider })` | `braveSearchProvider`, `serperSearchProvider`, `tavilySearchProvider` |
+| CAPTCHA solver | `{ solve(challenge) → CaptchaSolution }` | `createScraper({ solver })` | none — always yours |
+| Fetch | `typeof globalThis.fetch` | `createScraper({ fetch })`, per call, provider adapters | undici default |
+
+Programmatically, a custom adapter is just an object satisfying the
+interface — no registration, no base class:
+
+```ts
+import { createScraper, search } from "crawlio";
+
+const provider = {
+  async search(query, { limit } = {}) {
+    const res = await fetch(`https://searx.example/search?q=${query}&format=json`);
+    return (await res.json()).results.map((r) => ({ url: r.url, title: r.title }));
+  },
+};
+await search("typed scraping sdk", { provider });
+
+const renderer = {
+  async render(url, { timeout } = {}) {
+    const html = await myBrowserPool.render(url, timeout);
+    return { url, html };
+  },
+  async close() { await myBrowserPool.drain(); },
+};
+const scraper = createScraper({ render: renderer });
+```
+
+For the CLI, `--provider` and `--renderer` also accept a **module
+specifier** — `./my-provider.mjs` or `../adapter.js` (resolved against the
+cwd), an absolute path, a `file:` URL, or a package name resolvable from
+your project. The module must export the adapter object as `export
+default`, or under the conventional named export — `searchProvider` or
+`provider` for search, `renderer` for render (`export default` wins when
+both exist). An optional `close()` on a renderer runs on shutdown. A
+module that doesn't export the right shape fails with `ConfigError`
+naming the expected export.
+
+```js
+// my-provider.mjs
+export default {
+  async search(query, { limit } = {}) {
+    // ...return [{ url, title?, description? }]
+  },
+};
+
+// my-renderer.mjs — named export form
+export const renderer = {
+  async render(url, options) {
+    // ...return { url, html, status? }
+  },
+  async close() { /* optional — runs on shutdown */ },
+};
+```
+
+```sh
+crawlio search "typed scraping sdk" --provider ./my-provider.mjs
+crawlio scrape https://spa.example --render always --renderer ./my-renderer.mjs
+```
+
+`--api-key` only applies to built-in provider names — a provider module
+carries its own config. `--renderer` is mutually exclusive with
+`--engine`, the engine flags (`--browser`/`--channel`/`--executable-path`)
+and the settle flags (`--wait-for`/`--wait-ms`) for the same reason.
 
 ## License
 

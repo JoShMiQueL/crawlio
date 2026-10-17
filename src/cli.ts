@@ -7,30 +7,26 @@
  *   crawlio scrape <url> [--fields 'title=h1;links=a.href@all'] [--render auto|always] [--json]
  *   crawlio map <url> [--limit N]
  *   crawlio crawl <url> [--max-depth N] [--max-pages N]
- *   crawlio search <query> [--provider brave|serper|tavily] [--api-key <key>] [--limit N] [--json]
+ *   crawlio search <query> [--provider <name|module>] [--api-key <key>] [--limit N] [--json]
  *   crawlio install [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--dry-run]
  */
 import { spawn } from "node:child_process";
 import { parseArgs } from "node:util";
 import {
+  assertEngineName,
   detectPackageManager,
   type InstallCommand,
   installCommands,
+  loadRendererAdapter,
   parseCount,
   parseFieldsSpec,
+  rejectRenderOnlyFlags,
   rejectSearchOnlyFlags,
+  resolveRenderFlags,
+  resolveSearchProviderFlag,
 } from "./cli-args.js";
-import type { Renderer, RenderMode, SearchProviderName } from "./index.js";
-import {
-  ConfigError,
-  crawl,
-  createScraper,
-  map,
-  ScrapeError,
-  SEARCH_PROVIDER_NAMES,
-  search,
-  VERSION,
-} from "./index.js";
+import type { Renderer } from "./index.js";
+import { ConfigError, crawl, createScraper, map, ScrapeError, search, VERSION } from "./index.js";
 
 const USAGE = `crawlio ${VERSION} — typed web scraping for static HTML (+ JS via a render engine)
 
@@ -68,10 +64,16 @@ scrape options:
                          deterministic way to wait for SPA content.
   --wait-ms <N>          Fixed settle milliseconds after navigation/wait-for —
                          the cruder escape hatch; prefer --wait-for.
+  --renderer <module>    Custom render adapter: a module specifier (./x.mjs,
+                         /abs/path, package name) exporting a { render }
+                         object — as "export default" or a named "renderer"
+                         export; an optional close() runs on shutdown.
+                         Mutually exclusive with --engine, the engine flags
+                         and --wait-for/--wait-ms.
   --json                 Compact single-line JSON (default: pretty-printed).
 
-  --engine/--browser/--channel/--executable-path/--wait-for/--wait-ms all
-  require --render.
+  --engine/--renderer/--browser/--channel/--executable-path/--wait-for/
+  --wait-ms all require --render.
 
 map options:
   --limit N              Maximum URLs returned.
@@ -81,9 +83,18 @@ crawl options:
   --max-pages N          Hard cap on pages fetched (default 50).
 
 search options:
-  --provider brave|serper|tavily   Search provider (default brave).
+  --provider <name|module>   Search provider: a built-in name
+                         (brave|serper|tavily) or a module specifier
+                         (./x.mjs, /abs/path, package name) exporting a
+                         { search } object — as "export default" or a named
+                         "searchProvider"/"provider" export.
+                         Default: auto-detect from the API-key env vars —
+                         BRAVE_API_KEY → SERPER_API_KEY → TAVILY_API_KEY, in
+                         that order; zero set is an error naming all three.
   --api-key <key>        Provider API key — overrides the provider's env var
                          (BRAVE_API_KEY / SERPER_API_KEY / TAVILY_API_KEY).
+                         Built-in names only; a provider module carries its
+                         own config.
   --limit N              Maximum results returned.
 
 install options:
@@ -127,12 +138,7 @@ interface ClosableRenderer extends Renderer {
  */
 async function resolveEngine(engine: string | undefined): Promise<"playwright" | "puppeteer"> {
   if (engine !== undefined) {
-    if (engine !== "playwright" && engine !== "puppeteer") {
-      throw new ConfigError(
-        `\`--engine\` must be "playwright" or "puppeteer", got ${JSON.stringify(engine)}`,
-      );
-    }
-    return engine;
+    return assertEngineName(engine);
   }
   if (await moduleAvailable("playwright-core")) return "playwright";
   if (await moduleAvailable("puppeteer-core")) return "puppeteer";
@@ -144,6 +150,7 @@ async function resolveEngine(engine: string | undefined): Promise<"playwright" |
 /** The `--render`-scoped flags, grouped for {@link loadRenderer}. */
 interface RenderFlags {
   engine?: string;
+  renderer?: string;
   browser?: string;
   channel?: string;
   executablePath?: string;
@@ -159,6 +166,12 @@ interface RenderFlags {
  * launches.
  */
 async function loadRenderer(flags: RenderFlags): Promise<ClosableRenderer> {
+  if (flags.renderer !== undefined) {
+    // `resolveRenderFlags` already rejected the engine/settle flags a
+    // module renderer cannot honor — it replaces engine resolution
+    // entirely, so none of the flag plumbing below applies.
+    return loadRendererAdapter(flags.renderer);
+  }
   const resolved = await resolveEngine(flags.engine);
   const settle = {
     ...(flags.waitForSelector === undefined ? {} : { waitForSelector: flags.waitForSelector }),
@@ -231,6 +244,7 @@ async function main(argv: string[]): Promise<number> {
       "wait-ms": { type: "string" },
       limit: { type: "string" },
       provider: { type: "string" },
+      renderer: { type: "string" },
       "api-key": { type: "string" },
       "max-depth": { type: "string" },
       "max-pages": { type: "string" },
@@ -257,40 +271,17 @@ async function main(argv: string[]): Promise<number> {
       rejectSearchOnlyFlags(values, "scrape");
       const fields =
         values.fields === undefined ? { title: "title" } : parseFieldsSpec(values.fields);
-      let renderMode: RenderMode | undefined;
-      if (values.render !== undefined) {
-        if (values.render !== "auto" && values.render !== "always") {
-          throw new ConfigError(
-            `\`--render\` must be "auto" or "always", got ${JSON.stringify(values.render)}`,
-          );
-        }
-        renderMode = values.render;
-      }
-      if (renderMode === undefined) {
-        // Engine/settle flags are meaningless without `--render` — fail
-        // loudly instead of silently dropping them.
-        const renderOnly = [
-          ["--engine", values.engine],
-          ["--browser", values.browser],
-          ["--channel", values.channel],
-          ["--executable-path", values["executable-path"]],
-          ["--wait-for", values["wait-for"]],
-          ["--wait-ms", values["wait-ms"]],
-        ]
-          .filter(([, value]) => value !== undefined)
-          .map(([flag]) => `\`${flag}\``);
-        if (renderOnly.length > 0) {
-          throw new ConfigError(
-            `${renderOnly.join(", ")} ${renderOnly.length === 1 ? "requires" : "require"} \`--render auto|always\``,
-          );
-        }
-      }
+      // Validates `--render` plus every flag hanging off it: a bad mode
+      // value, render-scoped flags without `--render`, and engine/settle
+      // flags a `--renderer` module cannot honor are all ConfigErrors.
+      const renderMode = resolveRenderFlags(values);
       const waitMs = parseCount(values["wait-ms"], "--wait-ms");
       const renderer =
         renderMode === undefined
           ? undefined
           : await loadRenderer({
               engine: values.engine,
+              renderer: values.renderer,
               browser: values.browser,
               channel: values.channel,
               executablePath: values["executable-path"],
@@ -311,6 +302,7 @@ async function main(argv: string[]): Promise<number> {
     case "map": {
       if (url === undefined) throw new ConfigError("`map` needs a URL");
       rejectSearchOnlyFlags(values, "map");
+      rejectRenderOnlyFlags(values, "map");
       const result = await map(url, { limit: parseCount(values.limit, "--limit") });
       printJson(result, values.json);
       return 0;
@@ -318,6 +310,7 @@ async function main(argv: string[]): Promise<number> {
     case "crawl": {
       if (url === undefined) throw new ConfigError("`crawl` needs a URL");
       rejectSearchOnlyFlags(values, "crawl");
+      rejectRenderOnlyFlags(values, "crawl");
       const result = await crawl(url, {
         maxDepth: parseCount(values["max-depth"], "--max-depth"),
         maxPages: parseCount(values["max-pages"], "--max-pages"),
@@ -328,18 +321,17 @@ async function main(argv: string[]): Promise<number> {
     }
     case "search": {
       if (url === undefined) throw new ConfigError("`search` needs a query");
-      const provider = values.provider ?? "brave";
-      if (!(SEARCH_PROVIDER_NAMES as readonly string[]).includes(provider)) {
-        throw new ConfigError(
-          `\`--provider\` must be one of ${SEARCH_PROVIDER_NAMES.map((name) => `"${name}"`).join(", ")}, got ${JSON.stringify(provider)}`,
-        );
-      }
-      // The name resolves through the library's provider registry; its
+      rejectRenderOnlyFlags(values, "search");
+      // Resolution order: explicit `--provider` (built-in name or module
+      // specifier) → env auto-detect (BRAVE→SERPER→TAVILY) → ConfigError.
+      // `--api-key` with a module specifier is rejected inside, BEFORE the
+      // adapter module is imported.
+      const provider = await resolveSearchProviderFlag(values.provider, values["api-key"]);
+      // A name resolves through the library's provider registry; its
       // env-key default (plus the `--api-key` override) is what makes
-      // `crawlio search` a zero-config command.
+      // `crawlio search` a near-zero-config command.
       const results = await search(url, {
-        // The `includes` check above is what this cast claims.
-        provider: provider as SearchProviderName,
+        provider,
         ...(values["api-key"] === undefined ? {} : { apiKey: values["api-key"] }),
         limit: parseCount(values.limit, "--limit"),
       });
@@ -348,12 +340,8 @@ async function main(argv: string[]): Promise<number> {
     }
     case "install": {
       rejectSearchOnlyFlags(values, "install");
-      const engine = values.engine ?? "playwright";
-      if (engine !== "playwright" && engine !== "puppeteer") {
-        throw new ConfigError(
-          `\`--engine\` must be "playwright" or "puppeteer", got ${JSON.stringify(engine)}`,
-        );
-      }
+      rejectRenderOnlyFlags(values, "install");
+      const engine = assertEngineName(values.engine ?? "playwright");
       const browser = values.browser ?? "chromium";
       if (engine === "playwright" && !["chromium", "firefox", "webkit"].includes(browser)) {
         throw new ConfigError(

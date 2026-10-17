@@ -543,4 +543,83 @@ describe("playwrightRenderer adapter", () => {
     expect(fake.state.launches).toBe(2);
     await renderer.close();
   });
+
+  it("does not cache a failed launch — the next render retries", async () => {
+    const fake = fakePlaywrightModule();
+    let loads = 0;
+    const renderer = playwrightRenderer({
+      __loadPlaywright: async () => {
+        loads += 1;
+        if (loads === 1) {
+          throw Object.assign(new Error("Cannot find package 'playwright-core'"), {
+            code: "ERR_MODULE_NOT_FOUND",
+          });
+        }
+        return fake.mod;
+      },
+    } as PlaywrightRendererOptions);
+    const err = await renderer.render("https://example.com/").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConfigError);
+    expect(loads).toBe(1);
+    // The failed launch was not cached — the retry invokes the loader again.
+    const page = await renderer.render("https://example.com/");
+    expect(loads).toBe(2);
+    expect(page.html).toContain("from the engine");
+    await renderer.close();
+  });
+
+  it("close() drains a still-in-flight launch — the browser closes once it resolves", async () => {
+    const fake = fakePlaywrightModule();
+    let resolveLoad!: (mod: PlaywrightCore) => void;
+    const loading = new Promise<PlaywrightCore>((res) => {
+      resolveLoad = res;
+    });
+    const renderer = playwrightRenderer({
+      __loadPlaywright: () => loading,
+    } as PlaywrightRendererOptions);
+    const rendering = renderer.render("https://example.com/");
+    const closed = renderer.close();
+    resolveLoad(fake.mod);
+    // The in-flight render still completes — close() only reaps the browser.
+    const page = await rendering;
+    expect(page.html).toContain("from the engine");
+    await closed;
+    expect(fake.state.browserClosed).toBe(true);
+    // And a later render relaunches cleanly.
+    await renderer.render("https://example.com/again");
+    expect(fake.state.launches).toBe(2);
+    await renderer.close();
+  });
+
+  it("a launch rejected after close() cannot clobber a newer launch", async () => {
+    // The race: render A starts launch P1; close() detaches P1; render B
+    // starts launch P2. When P1 then rejects late, its cleanup must NOT
+    // clear the tracked P2 — the identity guard in `lazyBrowser`.
+    const fake = fakePlaywrightModule();
+    const loads: Array<{
+      resolve: (mod: PlaywrightCore) => void;
+      reject: (error: unknown) => void;
+    }> = [];
+    const renderer = playwrightRenderer({
+      __loadPlaywright: () =>
+        new Promise<PlaywrightCore>((resolve, reject) => {
+          loads.push({ resolve, reject });
+        }),
+    } as PlaywrightRendererOptions);
+    const first = renderer.render("https://example.com/old");
+    const detached = renderer.close();
+    const second = renderer.render("https://example.com/new");
+    expect(loads).toHaveLength(2);
+    loads[0]?.reject(new Error("late failure"));
+    await expect(first).rejects.toBeInstanceOf(ConfigError);
+    loads[1]?.resolve(fake.mod);
+    const page = await second;
+    expect(page.html).toContain("from the engine");
+    await detached;
+    // P1's late rejection left P2 tracked: the second browser is still open
+    // and a normal close() reaps it.
+    expect(fake.state.browserClosed).toBe(false);
+    await renderer.close();
+    expect(fake.state.browserClosed).toBe(true);
+  });
 });

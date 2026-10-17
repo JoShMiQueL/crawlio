@@ -3,12 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  assertEngineName,
   detectPackageManager,
   installCommands,
   packageManagerFromField,
   parseCount,
   parseFieldsSpec,
+  rejectRenderOnlyFlags,
   rejectSearchOnlyFlags,
+  resolveRenderFlags,
 } from "../src/cli-args.js";
 import { ConfigError } from "../src/index.js";
 
@@ -124,6 +127,133 @@ describe("rejectSearchOnlyFlags — --provider/--api-key belong to `crawlio sear
     expect(() =>
       rejectSearchOnlyFlags({ provider: undefined, "api-key": undefined }, "map"),
     ).not.toThrow();
+  });
+});
+
+describe("resolveRenderFlags — the `scrape` --render contract", () => {
+  /** flag name → the RenderFlagValues key that carries it. */
+  const RENDER_SCOPED: Array<[flag: string, values: Record<string, string>]> = [
+    ["--engine", { engine: "playwright" }],
+    ["--renderer", { renderer: "./adapter.mjs" }],
+    ["--browser", { browser: "chromium" }],
+    ["--channel", { channel: "chrome" }],
+    ["--executable-path", { "executable-path": "/bin/browser" }],
+    ["--wait-for", { "wait-for": "#app" }],
+    ["--wait-ms", { "wait-ms": "100" }],
+  ];
+
+  it("parses --render auto/always and returns undefined when absent", () => {
+    expect(resolveRenderFlags({ render: "auto" })).toBe("auto");
+    expect(resolveRenderFlags({ render: "always" })).toBe("always");
+    expect(resolveRenderFlags({})).toBeUndefined();
+  });
+
+  it("rejects a bad --render value, naming it", () => {
+    const error = (() => {
+      try {
+        resolveRenderFlags({ render: "sometimes" });
+      } catch (err) {
+        return err;
+      }
+    })();
+    expect(error).toBeInstanceOf(ConfigError);
+    expect((error as ConfigError).message).toContain('"sometimes"');
+  });
+
+  it("rejects each render-scoped flag without --render, naming the flag", () => {
+    for (const [flag, values] of RENDER_SCOPED) {
+      let error: unknown;
+      try {
+        resolveRenderFlags(values);
+      } catch (err) {
+        error = err;
+      }
+      expect(error).toBeInstanceOf(ConfigError);
+      expect((error as ConfigError).message).toContain(flag);
+      expect((error as ConfigError).message).toContain("--render");
+    }
+  });
+
+  it("accepts engine/settle flags under --render", () => {
+    expect(() =>
+      resolveRenderFlags({
+        render: "always",
+        engine: "playwright",
+        browser: "chromium",
+        channel: "chrome",
+        "wait-for": "#app",
+        "wait-ms": "100",
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects every engine/settle flag combined with --renderer", () => {
+    for (const [flag, values] of RENDER_SCOPED.filter(([flag]) => flag !== "--renderer")) {
+      let error: unknown;
+      try {
+        resolveRenderFlags({ render: "always", renderer: "./adapter.mjs", ...values });
+      } catch (err) {
+        error = err;
+      }
+      expect(error).toBeInstanceOf(ConfigError);
+      expect((error as ConfigError).message).toContain(flag);
+      expect((error as ConfigError).message).toContain("--renderer");
+    }
+    // --renderer alone is the clean module form.
+    expect(() => resolveRenderFlags({ render: "always", renderer: "./adapter.mjs" })).not.toThrow();
+  });
+});
+
+describe("rejectRenderOnlyFlags — render flags belong to `crawlio scrape`", () => {
+  const ALL_RENDER_FLAGS: Record<string, string> = {
+    render: "auto",
+    engine: "playwright",
+    renderer: "./adapter.mjs",
+    browser: "chromium",
+    channel: "chrome",
+    "executable-path": "/bin/browser",
+    "wait-for": "#app",
+    "wait-ms": "100",
+  };
+
+  it("rejects each render-scoped flag on map/crawl/search", () => {
+    for (const command of ["map", "crawl", "search"]) {
+      for (const [key, value] of Object.entries(ALL_RENDER_FLAGS)) {
+        let error: unknown;
+        try {
+          rejectRenderOnlyFlags({ [key]: value }, command);
+        } catch (err) {
+          error = err;
+        }
+        expect(error).toBeInstanceOf(ConfigError);
+        expect((error as ConfigError).message).toContain("`crawlio scrape`");
+        expect((error as ConfigError).message).toContain(`\`crawlio ${command}\``);
+      }
+    }
+  });
+
+  it("rejects render-only flags on install but keeps --engine/--browser", () => {
+    const installOnly = ["render", "renderer", "channel", "executable-path", "wait-for", "wait-ms"];
+    for (const [key, value] of Object.entries(ALL_RENDER_FLAGS)) {
+      if (!installOnly.includes(key)) continue;
+      expect(() => rejectRenderOnlyFlags({ [key]: value }, "install")).toThrow(ConfigError);
+    }
+    // On install, --engine/--browser pick what to install — they are legal.
+    expect(() =>
+      rejectRenderOnlyFlags({ engine: "puppeteer", browser: "chromium" }, "install"),
+    ).not.toThrow();
+  });
+
+  it("accepts calls that set no render flag", () => {
+    expect(() => rejectRenderOnlyFlags({}, "map")).not.toThrow();
+  });
+});
+
+describe("assertEngineName — the --engine value contract", () => {
+  it("accepts the two engine names and rejects anything else", () => {
+    expect(assertEngineName("playwright")).toBe("playwright");
+    expect(assertEngineName("puppeteer")).toBe("puppeteer");
+    expect(() => assertEngineName("webkit")).toThrow(ConfigError);
   });
 });
 

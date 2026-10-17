@@ -237,23 +237,65 @@ export async function search(query: string, options: SearchOptions): Promise<Sea
   return options.limit === undefined ? results : results.slice(0, options.limit);
 }
 
-/** Options accepted by {@link braveSearchProvider}. */
-export interface BraveSearchProviderOptions {
+/**
+ * Options shared by the built-in HTTP search-provider adapters —
+ * {@link braveSearchProvider}, {@link serperSearchProvider}, and
+ * {@link tavilySearchProvider} all take the same credential/endpoint/transport
+ * triple. Each adapter's own options type is this base under its name; the
+ * adapter's docblock names its env-var fallback and auth header.
+ */
+export interface HttpSearchProviderOptions {
   /**
-   * Brave Search API key. Defaults to the `BRAVE_API_KEY` environment
-   * variable; an explicit value wins. Travels in the `X-Subscription-Token`
-   * header ONLY — never in the request URL — so it cannot leak through error
-   * `url`s, logs, or fixtures.
+   * API key. Defaults to the adapter's environment variable; an explicit
+   * value wins. Travels in a request header ONLY — never in the request URL
+   * or body — so it cannot leak through error `url`s, logs, or fixtures.
    */
   apiKey?: string;
   /**
-   * API endpoint. Defaults to Brave's web-search endpoint; overridable for
-   * tests and proxies.
+   * API endpoint. Defaults to the adapter's endpoint; overridable for tests
+   * and proxies.
    */
   baseUrl?: string;
   /** Injected fetch implementation (useful for tests). */
   fetch?: typeof globalThis.fetch;
 }
+
+/**
+ * Resolve a provider API key: the explicit option wins over the env-var
+ * fallback; neither is a construction-time {@link ConfigError}, not a
+ * mid-call failure.
+ */
+function resolveApiKey(explicit: string | undefined, envName: string, adapterName: string): string {
+  const apiKey = (explicit ?? process.env[envName])?.trim();
+  if (apiKey === undefined || apiKey === "") {
+    throw new ConfigError(
+      `\`${adapterName}\` needs an API key — pass \`apiKey\` or set the ${envName} environment variable`,
+    );
+  }
+  return apiKey;
+}
+
+/**
+ * Parse and eagerly validate a provider `baseUrl`: a malformed value fails
+ * at construction, not on the first query. GET providers clone the parsed
+ * URL per call; POST providers stringify it once.
+ */
+function parseBaseUrl(baseUrl: string): URL {
+  try {
+    return new URL(baseUrl);
+  } catch (cause) {
+    throw new ConfigError(`\`baseUrl\` must be a valid URL, got ${scrubUrl(baseUrl)}`, {
+      cause,
+    });
+  }
+}
+
+/**
+ * Options accepted by {@link braveSearchProvider} — the shared
+ * {@link HttpSearchProviderOptions} triple. Env-var fallback:
+ * `BRAVE_API_KEY`; the key travels in the `X-Subscription-Token` header.
+ */
+export type BraveSearchProviderOptions = HttpSearchProviderOptions;
 
 /** Default Brave web-search endpoint. */
 const BRAVE_DEFAULT_BASE_URL = "https://api.search.brave.com/res/v1/web/search";
@@ -284,22 +326,9 @@ const BRAVE_DEFAULT_BASE_URL = "https://api.search.brave.com/res/v1/web/search";
  * const results = await search("typed scraping sdk", { provider, limit: 5 });
  */
 export function braveSearchProvider(options: BraveSearchProviderOptions = {}): SearchProvider {
-  const apiKey = (options.apiKey ?? process.env.BRAVE_API_KEY)?.trim();
-  if (apiKey === undefined || apiKey === "") {
-    throw new ConfigError(
-      "`braveSearchProvider` needs an API key — pass `apiKey` or set the BRAVE_API_KEY environment variable",
-    );
-  }
-  const baseUrl = options.baseUrl ?? BRAVE_DEFAULT_BASE_URL;
-  let endpoint: URL;
-  try {
-    // Parse once at construction: validation stays eager (a malformed
-    // baseUrl fails here, not on the first query) and each call clones the
-    // parsed URL instead of re-parsing the string.
-    endpoint = new URL(baseUrl);
-  } catch (cause) {
-    throw new ConfigError(`\`baseUrl\` must be a valid URL, got ${scrubUrl(baseUrl)}`, { cause });
-  }
+  const apiKey = resolveApiKey(options.apiKey, "BRAVE_API_KEY", "braveSearchProvider");
+  // Each call clones the parsed URL instead of re-parsing the string.
+  const endpoint = parseBaseUrl(options.baseUrl ?? BRAVE_DEFAULT_BASE_URL);
   const fetchImpl = options.fetch ?? globalThis.fetch;
 
   return {
@@ -483,23 +512,12 @@ function mapSearchHits(
   return hits;
 }
 
-/** Options accepted by {@link serperSearchProvider}. */
-export interface SerperSearchProviderOptions {
-  /**
-   * Serper API key. Defaults to the `SERPER_API_KEY` environment variable; an
-   * explicit value wins. Travels in the `X-API-KEY` header ONLY — never in
-   * the request URL or body — so it cannot leak through error `url`s, logs,
-   * or fixtures.
-   */
-  apiKey?: string;
-  /**
-   * API endpoint. Defaults to Serper's Google search endpoint; overridable
-   * for tests and proxies.
-   */
-  baseUrl?: string;
-  /** Injected fetch implementation (useful for tests). */
-  fetch?: typeof globalThis.fetch;
-}
+/**
+ * Options accepted by {@link serperSearchProvider} — the shared
+ * {@link HttpSearchProviderOptions} triple. Env-var fallback:
+ * `SERPER_API_KEY`; the key travels in the `X-API-KEY` header.
+ */
+export type SerperSearchProviderOptions = HttpSearchProviderOptions;
 
 /** Default Serper Google-search endpoint. */
 const SERPER_DEFAULT_BASE_URL = "https://google.serper.dev/search";
@@ -526,19 +544,8 @@ const SERPER_DEFAULT_BASE_URL = "https://google.serper.dev/search";
  * const results = await search("typed scraping sdk", { provider, limit: 5 });
  */
 export function serperSearchProvider(options: SerperSearchProviderOptions = {}): SearchProvider {
-  const apiKey = (options.apiKey ?? process.env.SERPER_API_KEY)?.trim();
-  if (apiKey === undefined || apiKey === "") {
-    throw new ConfigError(
-      "`serperSearchProvider` needs an API key — pass `apiKey` or set the SERPER_API_KEY environment variable",
-    );
-  }
-  const baseUrl = options.baseUrl ?? SERPER_DEFAULT_BASE_URL;
-  let endpoint: URL;
-  try {
-    endpoint = new URL(baseUrl);
-  } catch (cause) {
-    throw new ConfigError(`\`baseUrl\` must be a valid URL, got ${scrubUrl(baseUrl)}`, { cause });
-  }
+  const apiKey = resolveApiKey(options.apiKey, "SERPER_API_KEY", "serperSearchProvider");
+  const endpoint = parseBaseUrl(options.baseUrl ?? SERPER_DEFAULT_BASE_URL);
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const requestUrl = endpoint.toString();
 
@@ -563,23 +570,12 @@ export function serperSearchProvider(options: SerperSearchProviderOptions = {}):
   };
 }
 
-/** Options accepted by {@link tavilySearchProvider}. */
-export interface TavilySearchProviderOptions {
-  /**
-   * Tavily API key. Defaults to the `TAVILY_API_KEY` environment variable; an
-   * explicit value wins. Travels in the `Authorization: Bearer` header ONLY —
-   * never in the request URL or body — so it cannot leak through error
-   * `url`s, logs, or fixtures.
-   */
-  apiKey?: string;
-  /**
-   * API endpoint. Defaults to Tavily's search endpoint; overridable for
-   * tests and proxies.
-   */
-  baseUrl?: string;
-  /** Injected fetch implementation (useful for tests). */
-  fetch?: typeof globalThis.fetch;
-}
+/**
+ * Options accepted by {@link tavilySearchProvider} — the shared
+ * {@link HttpSearchProviderOptions} triple. Env-var fallback:
+ * `TAVILY_API_KEY`; the key travels in the `Authorization: Bearer` header.
+ */
+export type TavilySearchProviderOptions = HttpSearchProviderOptions;
 
 /** Default Tavily search endpoint. */
 const TAVILY_DEFAULT_BASE_URL = "https://api.tavily.com/search";
@@ -607,19 +603,8 @@ const TAVILY_DEFAULT_BASE_URL = "https://api.tavily.com/search";
  * const results = await search("typed scraping sdk", { provider, limit: 5 });
  */
 export function tavilySearchProvider(options: TavilySearchProviderOptions = {}): SearchProvider {
-  const apiKey = (options.apiKey ?? process.env.TAVILY_API_KEY)?.trim();
-  if (apiKey === undefined || apiKey === "") {
-    throw new ConfigError(
-      "`tavilySearchProvider` needs an API key — pass `apiKey` or set the TAVILY_API_KEY environment variable",
-    );
-  }
-  const baseUrl = options.baseUrl ?? TAVILY_DEFAULT_BASE_URL;
-  let endpoint: URL;
-  try {
-    endpoint = new URL(baseUrl);
-  } catch (cause) {
-    throw new ConfigError(`\`baseUrl\` must be a valid URL, got ${scrubUrl(baseUrl)}`, { cause });
-  }
+  const apiKey = resolveApiKey(options.apiKey, "TAVILY_API_KEY", "tavilySearchProvider");
+  const endpoint = parseBaseUrl(options.baseUrl ?? TAVILY_DEFAULT_BASE_URL);
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const requestUrl = endpoint.toString();
 

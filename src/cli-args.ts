@@ -1,13 +1,19 @@
 /**
  * Pure helpers for the `crawlio` CLI (`src/cli.ts`): the `--fields`
- * mini-syntax, numeric flag parsing, package-manager detection and the
- * `install` command plan. Everything here is free of process I/O (except
- * {@link detectPackageManager}, which only reads the target directory) so it
- * is unit-testable without spawning a browser or a package manager.
+ * mini-syntax, numeric flag parsing, flag/command routing, adapter loading,
+ * package-manager detection and the `install` command plan. Everything here
+ * is free of process I/O (except {@link detectPackageManager}, which only
+ * reads the target directory, and the `load*Adapter` importers) so it is
+ * unit-testable without spawning a browser or a package manager.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { isAbsolute, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { ConfigError } from "./errors.js";
+import type { Renderer, RenderMode } from "./render.js";
+import type { SearchProvider, SearchProviderName } from "./search.js";
+import { SEARCH_PROVIDER_NAMES } from "./search.js";
 import type { FieldSpec, FieldSpecRecord } from "./types.js";
 
 /**
@@ -143,6 +149,299 @@ export function rejectSearchOnlyFlags(
   throw new ConfigError(
     `${searchOnly.join(", ")} ${searchOnly.length === 1 ? "is" : "are"} only valid on \`crawlio search\`, not \`crawlio ${command}\``,
   );
+}
+
+/**
+ * The `--render`-scoped `parseArgs` values (raw, dashed names) — the shared
+ * input of the render-flag routing helpers below.
+ */
+export interface RenderFlagValues {
+  render?: string;
+  engine?: string;
+  renderer?: string;
+  browser?: string;
+  channel?: string;
+  "executable-path"?: string;
+  "wait-for"?: string;
+  "wait-ms"?: string;
+}
+
+/**
+ * The flags that configure a `--render` run, as `[flag, raw-value]` pairs —
+ * everything that is meaningless without it. `--render` itself is not
+ * listed: it is the flag the rest hang off.
+ */
+function renderScopedFlags(
+  values: RenderFlagValues,
+): Array<[flag: string, value: string | undefined]> {
+  return [
+    ["--engine", values.engine],
+    ["--renderer", values.renderer],
+    ["--browser", values.browser],
+    ["--channel", values.channel],
+    ["--executable-path", values["executable-path"]],
+    ["--wait-for", values["wait-for"]],
+    ["--wait-ms", values["wait-ms"]],
+  ];
+}
+
+/**
+ * The `--render` value contract: `"auto"` or `"always"`, or `undefined`
+ * when the flag was not passed. Anything else is a {@link ConfigError}.
+ */
+export function parseRenderMode(render: string | undefined): RenderMode | undefined {
+  if (render === undefined) return undefined;
+  if (render !== "auto" && render !== "always") {
+    throw new ConfigError(`\`--render\` must be "auto" or "always", got ${JSON.stringify(render)}`);
+  }
+  return render;
+}
+
+/**
+ * `--engine`/`--renderer`/`--browser`/`--channel`/`--executable-path`/
+ * `--wait-for`/`--wait-ms` only configure a render that `--render` turned
+ * on — passed alone they would be silently ignored, so fail loudly.
+ */
+export function rejectRenderFlagsWithoutRender(values: RenderFlagValues): void {
+  const renderOnly = renderScopedFlags(values)
+    .filter(([, value]) => value !== undefined)
+    .map(([flag]) => `\`${flag}\``);
+  if (renderOnly.length > 0) {
+    throw new ConfigError(
+      `${renderOnly.join(", ")} ${renderOnly.length === 1 ? "requires" : "require"} \`--render auto|always\``,
+    );
+  }
+}
+
+/**
+ * A `--renderer` module replaces engine resolution entirely: the engine and
+ * settle flags configure the built-in adapters and would be silently
+ * ignored, so each one present is a {@link ConfigError}.
+ */
+export function rejectRendererModuleConflicts(values: RenderFlagValues): void {
+  if (values.renderer === undefined) return;
+  const conflicts = renderScopedFlags(values)
+    .filter(([flag, value]) => flag !== "--renderer" && value !== undefined)
+    .map(([flag]) => `\`${flag}\``);
+  if (conflicts.length > 0) {
+    throw new ConfigError(
+      `${conflicts.join(", ")} ${conflicts.length === 1 ? "does" : "do"} not apply to \`--renderer\` — the module carries its own config`,
+    );
+  }
+}
+
+/**
+ * The `scrape` command's `--render` contract in one place: parse the mode
+ * ({@link parseRenderMode}); with no mode, reject the render-scoped flags
+ * that would be silently dropped ({@link rejectRenderFlagsWithoutRender});
+ * with one, reject the engine/settle flags that cannot reach a `--renderer`
+ * module ({@link rejectRendererModuleConflicts}).
+ */
+export function resolveRenderFlags(values: RenderFlagValues): RenderMode | undefined {
+  const renderMode = parseRenderMode(values.render);
+  if (renderMode === undefined) {
+    rejectRenderFlagsWithoutRender(values);
+  } else {
+    rejectRendererModuleConflicts(values);
+  }
+  return renderMode;
+}
+
+/**
+ * The render-scoped flags mean something only on `crawlio scrape` — the
+ * symmetric counterpart to {@link rejectSearchOnlyFlags}: passed to
+ * `map`/`crawl`/`search`/`install` they would be silently ignored, so fail
+ * loudly. On `install`, `--engine`/`--browser` stay legal — there they pick
+ * what to install, not how to render.
+ */
+export function rejectRenderOnlyFlags(values: RenderFlagValues, command: string): void {
+  const renderOnly = ([["--render", values.render]] as Array<[string, string | undefined]>)
+    .concat(renderScopedFlags(values))
+    .filter(([, value]) => value !== undefined)
+    .filter(([flag]) => !(command === "install" && (flag === "--engine" || flag === "--browser")))
+    .map(([flag]) => `\`${flag}\``);
+  if (renderOnly.length === 0) return;
+  throw new ConfigError(
+    `${renderOnly.join(", ")} ${renderOnly.length === 1 ? "is" : "are"} only valid on \`crawlio scrape\`, not \`crawlio ${command}\``,
+  );
+}
+
+/**
+ * The `--engine` value contract, shared by `--render` resolution and
+ * `crawlio install`: exactly "playwright" or "puppeteer".
+ */
+export function assertEngineName(engine: string): "playwright" | "puppeteer" {
+  if (engine !== "playwright" && engine !== "puppeteer") {
+    throw new ConfigError(
+      `\`--engine\` must be "playwright" or "puppeteer", got ${JSON.stringify(engine)}`,
+    );
+  }
+  return engine;
+}
+
+/**
+ * The provider API-key env vars {@link detectSearchProviderFromEnv} checks,
+ * in precedence order — the same order the `--help` text documents.
+ */
+const PROVIDER_ENV_VARS = [
+  ["BRAVE_API_KEY", "brave"],
+  ["SERPER_API_KEY", "serper"],
+  ["TAVILY_API_KEY", "tavily"],
+] as const;
+
+/**
+ * Detect which built-in search provider to use when `--provider` was not
+ * passed: the first env var of {@link PROVIDER_ENV_VARS} that is set wins
+ * (`BRAVE_API_KEY` → `SERPER_API_KEY` → `TAVILY_API_KEY` — deterministic).
+ * Returns `undefined` when none is set.
+ */
+export function detectSearchProviderFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): SearchProviderName | undefined {
+  for (const [envName, name] of PROVIDER_ENV_VARS) {
+    if (env[envName]?.trim()) return name;
+  }
+  return undefined;
+}
+
+/**
+ * Import an adapter module for a CLI flag (`--provider`, `--renderer`).
+ *
+ * Specifier forms: a relative path (`./my-adapter.mjs` — resolved against
+ * the cwd), an absolute path, a `file:` URL, or a bare package name. A bare
+ * name resolves against the cwd's `node_modules` first (the user's own
+ * project install wins — relevant for `npx`/global crawlio), falling back
+ * to crawlio's own module context. A load failure is a {@link ConfigError}
+ * naming the flag and specifier.
+ */
+async function importAdapterModule(
+  specifier: string,
+  flag: string,
+): Promise<Record<string, unknown>> {
+  let importTarget: string;
+  if (specifier.startsWith("file:")) {
+    importTarget = specifier;
+  } else if (
+    // `.\\`/`..\\` are the Windows spellings of the relative forms —
+    // without them `.\x.mjs` would fall through to package resolution.
+    specifier.startsWith("./") ||
+    specifier.startsWith("../") ||
+    specifier.startsWith(".\\") ||
+    specifier.startsWith("..\\") ||
+    isAbsolute(specifier)
+  ) {
+    importTarget = pathToFileURL(resolve(process.cwd(), specifier)).href;
+  } else {
+    try {
+      importTarget = pathToFileURL(
+        createRequire(join(process.cwd(), "package.json")).resolve(specifier),
+      ).href;
+    } catch {
+      importTarget = specifier;
+    }
+  }
+  try {
+    return (await import(importTarget)) as Record<string, unknown>;
+  } catch (cause) {
+    throw new ConfigError(
+      `\`${flag}\` could not load adapter module ${JSON.stringify(specifier)}`,
+      { cause },
+    );
+  }
+}
+
+/**
+ * The object a module export is picked from: `export default` wins, else
+ * the conventional named export for the kind (`searchProvider`/`provider`
+ * for search, `renderer` for render).
+ */
+function pickAdapterExport(mod: Record<string, unknown>, namedExports: readonly string[]): unknown {
+  if (Object.hasOwn(mod, "default")) return mod.default;
+  for (const name of namedExports) {
+    if (mod[name] !== undefined) return mod[name];
+  }
+  return undefined;
+}
+
+/**
+ * Load a custom {@link SearchProvider} for `--provider <specifier>`. The
+ * module must export an object with a `search(query, options)` method —
+ * `export default` or a named `searchProvider`/`provider` export. Anything
+ * else is a {@link ConfigError} naming the expected shape.
+ */
+export async function loadSearchProviderAdapter(specifier: string): Promise<SearchProvider> {
+  const mod = await importAdapterModule(specifier, "--provider");
+  const candidate = pickAdapterExport(mod, ["searchProvider", "provider"]);
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    typeof (candidate as SearchProvider).search !== "function"
+  ) {
+    throw new ConfigError(
+      `\`--provider\` module ${JSON.stringify(specifier)} must export a SearchProvider with a \`search(query, options)\` method — as \`export default\` or a named \`searchProvider\`/\`provider\` export`,
+    );
+  }
+  return candidate as SearchProvider;
+}
+
+/**
+ * Load a custom {@link Renderer} for `--renderer <specifier>`. The module
+ * must export an object with a `render(url, options)` method — `export
+ * default` or a named `renderer` export; an optional `close()` is honored
+ * on shutdown. Anything else is a {@link ConfigError} naming the expected
+ * shape.
+ */
+export async function loadRendererAdapter(specifier: string): Promise<Renderer> {
+  const mod = await importAdapterModule(specifier, "--renderer");
+  const candidate = pickAdapterExport(mod, ["renderer"]);
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    typeof (candidate as Renderer).render !== "function"
+  ) {
+    throw new ConfigError(
+      `\`--renderer\` module ${JSON.stringify(specifier)} must export a Renderer with a \`render(url, options)\` method — as \`export default\` or a named \`renderer\` export`,
+    );
+  }
+  return candidate as Renderer;
+}
+
+/**
+ * Resolve the `search` command's provider: an explicit `--provider` is
+ * either a built-in name ({@link SEARCH_PROVIDER_NAMES}) or a module
+ * specifier loaded through {@link loadSearchProviderAdapter}; with no flag,
+ * {@link detectSearchProviderFromEnv} picks from the API-key env vars and
+ * zero matches is a {@link ConfigError} naming all three. `--api-key`
+ * applies only to built-in names — combined with a module specifier it is
+ * rejected BEFORE the module is imported, so a bad flag combo never
+ * executes adapter code.
+ */
+export async function resolveSearchProviderFlag(
+  provider: string | undefined,
+  apiKey?: string,
+): Promise<SearchProvider | SearchProviderName> {
+  if (provider !== undefined) {
+    if ((SEARCH_PROVIDER_NAMES as readonly string[]).includes(provider)) {
+      return provider as SearchProviderName;
+    }
+    if (apiKey !== undefined) {
+      // A module-loaded provider is an object carrying its own config —
+      // `--api-key` would be silently ignored by `search`. Checked here,
+      // before `loadSearchProviderAdapter`, so the flag error never runs
+      // adapter code.
+      throw new ConfigError(
+        "`--api-key` only applies to built-in provider names — a provider module carries its own config",
+      );
+    }
+    return loadSearchProviderAdapter(provider);
+  }
+  const detected = detectSearchProviderFromEnv();
+  if (detected === undefined) {
+    throw new ConfigError(
+      "`crawlio search` needs a provider — pass `--provider <name|module>` or set one of BRAVE_API_KEY, SERPER_API_KEY, TAVILY_API_KEY",
+    );
+  }
+  return detected;
 }
 
 /** Package managers `crawlio install` knows how to drive. */

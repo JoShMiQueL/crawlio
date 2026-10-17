@@ -37,6 +37,7 @@ export {
 } from "./scraper.js";
 export type {
   BraveSearchProviderOptions,
+  HttpSearchProviderOptions,
   SearchCallOptions,
   SearchOptions,
   SearchProvider,
