@@ -250,3 +250,117 @@ export async function createCrawlioMcpHttpHandler(
     }
   };
 }
+
+/** A fetch-style request handler — what {@link createCrawlioMcpFetchHandler} returns. */
+export type CrawlioMcpFetchHandler = (req: Request) => Promise<Response>;
+
+/**
+ * The fetch-style sibling of {@link createCrawlioMcpHttpHandler} — the same
+ * stateless Streamable HTTP endpoint, shaped `(req: Request) => Response`
+ * for `Bun.serve` (and any other fetch-style server):
+ *
+ *   Bun.serve({ port, hostname: host, fetch: handler })
+ *
+ * It binds the SDK's `WebStandardStreamableHTTPServerTransport` — the web
+ * standard `Request`/`Response`/`ReadableStream` core that the `node:http`
+ * transport wraps. Same stateless rule: `sessionIdGenerator: undefined`,
+ * and a fresh transport + `McpServer` per request (SDK 1.32's stateless
+ * transport still refuses reuse), all bound to the shared `tools`.
+ *
+ * The fetch-land `res.on("close")`: the transport closes its own SSE
+ * streams after each response, but nothing fires "the response is done" —
+ * so the returned body is wrapped in a passthrough stream whose EOF and
+ * `cancel` (client disconnect) release the per-request server+transport,
+ * and `req.signal` covers an abort while `handleRequest` is still in
+ * flight. `onError` receives transport/handler errors — the bin pipes it
+ * to stderr.
+ */
+export async function createCrawlioMcpFetchHandler(
+  tools: CrawlioTools,
+  onError: (error: Error) => void = () => undefined,
+): Promise<CrawlioMcpFetchHandler> {
+  const peers = await loadMcpPeers();
+  let WebStandardTransportCtor: typeof import("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js").WebStandardStreamableHTTPServerTransport;
+  try {
+    ({ WebStandardStreamableHTTPServerTransport: WebStandardTransportCtor } = await import(
+      "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
+    ));
+  } catch (cause) {
+    throw new ConfigError(
+      "`crawlio-mcp --transport http` needs the optional peer `@modelcontextprotocol/sdk` — install it with `pnpm add @modelcontextprotocol/sdk zod`",
+      { cause },
+    );
+  }
+
+  return async (req) => {
+    let server: McpServer | undefined;
+    // Idempotent release — EOF, cancel and abort can all arrive for the
+    // same request.
+    const closeServer = (): void => {
+      const current = server;
+      server = undefined;
+      if (current !== undefined) {
+        void current.close().catch(() => undefined);
+      }
+    };
+    try {
+      // Construction lives inside the try too: a throwing transport or
+      // `buildMcpServer` must degrade to a 500 + onError, not an
+      // unhandled rejection taking the whole listener down.
+      const transport = new WebStandardTransportCtor({
+        sessionIdGenerator: undefined,
+      });
+      server = buildMcpServer(peers, tools);
+      server.server.onerror = onError;
+      req.signal.addEventListener("abort", closeServer, { once: true });
+      await server.connect(transport);
+      const response = await transport.handleRequest(req);
+      const body = response.body;
+      if (body === null) {
+        // No stream to wrap (202 notifications, error responses) — the
+        // response is complete the moment it is returned.
+        closeServer();
+        return response;
+      }
+      const reader = body.getReader();
+      const passthrough = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            const { done, value } = await reader.read();
+            // cancel() can fire while the read above is pending — then
+            // the stream is already torn down (desiredSize === null) and
+            // close()/enqueue()/error() would all throw TypeErrors.
+            if (controller.desiredSize === null) {
+              closeServer();
+              return;
+            }
+            if (done) {
+              controller.close();
+              closeServer();
+            } else {
+              controller.enqueue(value);
+            }
+          } catch (error) {
+            if (controller.desiredSize !== null) {
+              controller.error(error);
+            }
+            closeServer();
+          }
+        },
+        cancel(reason) {
+          void reader.cancel(reason).catch(() => undefined);
+          closeServer();
+        },
+      });
+      return new Response(passthrough, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    } catch (error) {
+      onError(error instanceof Error ? error : new Error(String(error)));
+      closeServer();
+      return new Response(null, { status: 500 });
+    }
+  };
+}

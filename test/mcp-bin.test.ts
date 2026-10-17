@@ -11,7 +11,12 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { describe, expect, it } from "vitest";
 import { parseMcpBinArgs } from "../src/cli-args.js";
 import { ConfigError } from "../src/index.js";
-import { createCrawlioMcpHttpHandler, createCrawlioTools } from "../src/mcp-server.js";
+import {
+  createCrawlioMcpFetchHandler,
+  createCrawlioMcpHttpHandler,
+  createCrawlioTools,
+} from "../src/mcp-server.js";
+import { isBun } from "../src/runtime.js";
 import { readFixture } from "./fixtures.js";
 
 type FetchImpl = typeof globalThis.fetch;
@@ -140,6 +145,94 @@ describe("createCrawlioMcpHttpHandler — real HTTP smoke", () => {
         // close() alone would wait for keep-alive connections to drain.
         httpServer.closeAllConnections();
       });
+      await tools.close();
+    }
+  });
+});
+
+/**
+ * The fetch-style sibling — `createCrawlioMcpFetchHandler`, the handler
+ * `serveHttp` mounts on `Bun.serve` under Bun. Two lanes:
+ *
+ * - The client-driven case runs on BOTH runtimes with no socket at all:
+ *   `StreamableHTTPClientTransport` accepts a custom `fetch`, so the same
+ *   real Client protocol flow (initialize → tools/list → tools/call)
+ *   exercises the handler via `new Request`.
+ * - The `Bun.serve` case binds a real loopback socket — it only exists on
+ *   the Bun lane, so vitest on Node skips it.
+ */
+describe("createCrawlioMcpFetchHandler — fetch-style handler", () => {
+  /** The assertions both lanes share — the same flow as the node:http smoke. */
+  async function exercise(client: Client, errors: Error[]): Promise<void> {
+    const list = await client.listTools();
+    expect(list.tools.map((tool) => tool.name)).toEqual(["scrape", "map", "crawl", "search"]);
+
+    const result = await client.callTool({
+      name: "scrape",
+      arguments: { url: "https://example.com/", fields: { title: "h1" } },
+    });
+    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
+    expect(JSON.parse(text as string)).toMatchObject({
+      title: expect.stringContaining("Trail"),
+    });
+
+    // A second call proves the stateless per-request transport survives
+    // reuse — the SDK refuses to re-serve a used one.
+    const again = await client.callTool({
+      name: "map",
+      arguments: { url: "https://example.com/", limit: 2 },
+    });
+    expect(again.isError).not.toBe(true);
+    expect(errors).toEqual([]);
+  }
+
+  it("serves initialize + tools/list + tools/call through a direct Request", async () => {
+    const impl = fixtureFetch(readFixture("product-listing.html"));
+    const tools = createCrawlioTools({ fetch: impl });
+    const errors: Error[] = [];
+    const handler = await createCrawlioMcpFetchHandler(tools, (error) => errors.push(error));
+    try {
+      const client = new Client({ name: "test-client", version: "0.0.0" });
+      // No socket: the client transport's `fetch` option hands every HTTP
+      // request to the handler as a web-standard `new Request`.
+      const transport = new StreamableHTTPClientTransport(new URL("http://crawlio.test/mcp"), {
+        fetch: (url, init) => handler(new Request(url, init)),
+      });
+      try {
+        await client.connect(transport);
+        await exercise(client, errors);
+      } finally {
+        await client.close();
+      }
+    } finally {
+      await tools.close();
+    }
+  });
+
+  // `Bun.serve` does not exist under Node — the bun test lane runs this
+  // for real, vitest on Node reports it skipped.
+  (isBun ? it : it.skip)("serves the same handler over a real Bun.serve socket", async () => {
+    const impl = fixtureFetch(readFixture("product-listing.html"));
+    const tools = createCrawlioTools({ fetch: impl });
+    const errors: Error[] = [];
+    const handler = await createCrawlioMcpFetchHandler(tools, (error) => errors.push(error));
+    // port 0 binds ephemeral — `server.port` resolves to the real one.
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: handler });
+    try {
+      const client = new Client({ name: "test-client", version: "0.0.0" });
+      const transport = new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${server.port}/mcp`),
+      );
+      try {
+        await client.connect(transport);
+        await exercise(client, errors);
+      } finally {
+        await client.close();
+      }
+    } finally {
+      // stop(true) force-closes open connections — the closeAllConnections
+      // equivalent for keep-alive/SSE sockets.
+      await server.stop(true);
       await tools.close();
     }
   });
