@@ -15,7 +15,8 @@
     // fresh checkout typechecks too.
     "paths": {
       "crawlio": ["./src/index.ts"],
-      "crawlio/playwright": ["./src/render/playwright.ts"]
+      "crawlio/playwright": ["./src/render/playwright.ts"],
+      "crawlio/puppeteer": ["./src/render/puppeteer.ts"]
     }
   },
   "include": ["e2e"]

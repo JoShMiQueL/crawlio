@@ -24,6 +24,24 @@ release.
 No npm token is stored in the repo — publishing uses npm trusted
 publishing (OIDC) only.
 
+## Rehearsing a release
+
+The workflow also triggers manually (**Actions → release → Run
+workflow**). A `workflow_dispatch` run executes the same `verify` chain
+but publishes with `npm publish --dry-run` and skips `gh release
+create` — the full release path is exercised end-to-end without
+shipping, useful before v0.1.0 exists or before cutting any new tag.
+
+## Choosing the version bump
+
+| Change since the last release | Bump |
+| --- | --- |
+| `feat` — new SDK surface | minor |
+| `fix`, `perf` | patch |
+| breaking API change while 0.x | minor (0.x has no major line to burn) |
+| `docs`, `ci`, `chore`, `test` only | no release on its own |
+| breaking API change from 1.0 | major |
+
 ## First publish is manual
 
 npm can't configure a trusted publisher for a package that doesn't
