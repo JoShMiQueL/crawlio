@@ -16,6 +16,7 @@
 - Stealth (opt-in) — browser header profiles, cookie jar, referer chain, jitter
 - Proxies — pool routing with rotation and ban-aware health checks
 - CAPTCHA solver seam — user-provided `solve` interface
+- Challenge detection — `detectChallenge` recognizes Cloudflare interstitials, Turnstile/reCAPTCHA/hCaptcha widgets, and Amazon's "Robot Check" bot-check page (detection only — no built-in solver claims Amazon)
 - Bun runtime support — `isBun` flag; under Bun, proxies route via `fetch`'s native `proxy` option instead of undici dispatchers, and `crawlio-mcp --transport http` serves via `Bun.serve` (`createCrawlioMcpFetchHandler` on the SDK's `WebStandardStreamableHTTPServerTransport`)
 - `build:bin` — `bun build --compile` standalone binaries for `crawlio` and `crawlio-mcp` into `dist-bin/` (engine peers stay external, version stamped from package.json)
 - `blockPrivateHosts` (opt-in) — SSRF guard refusing private/reserved IP literals and DNS answers before the request fires, rechecked on every redirect hop and on robots.txt probes; refusals throw `BlockedHostError` (`CRAWLIO_BLOCK_PRIVATE_HOSTS=1` on `crawlio-mcp`)

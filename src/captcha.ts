@@ -11,10 +11,13 @@ import type { CaptchaChallenge } from "./types.js";
  * a `sitekey` is worth extracting.
  *
  * Honesty note: these markers identify KNOWN challenge shapes (Cloudflare's
- * interstitial, Turnstile, reCAPTCHA, hCaptcha widgets). Unknown or custom
- * interstitials are not detected — and a 200 page that merely embeds a captcha
- * widget in a form WILL match its marker; scope `solver` per-call if the
- * target site embeds widgets on normal pages.
+ * interstitial, Turnstile, reCAPTCHA, hCaptcha widgets, Amazon's "Robot
+ * Check" full-page bot check). Unknown or custom interstitials are not
+ * detected — and a 200 page that merely embeds a captcha widget in a form
+ * WILL match its marker; scope `solver` per-call if the target site embeds
+ * widgets on normal pages. Detection is NOT a solvability claim: no
+ * built-in solver handles Amazon's bot-check pages — the type exists for
+ * honest error/reporting paths.
  */
 
 /** Statuses Cloudflare-style interstitials are served with. */
@@ -31,6 +34,27 @@ const WIDGET_MARKERS: ReadonlyArray<{
   { type: "turnstile", markers: ["cf-turnstile", "challenges.cloudflare.com/turnstile"] },
   { type: "recaptcha", markers: ["g-recaptcha", "www.google.com/recaptcha", "recaptcha.net"] },
   { type: "hcaptcha", markers: ["h-captcha", "hcaptcha.com"] },
+];
+
+/**
+ * Amazon's "Robot Check" — a third shape: a full-page bot check that is
+ * neither an interstitial challenge platform nor an embeddable widget. It
+ * is served at status 200, so only the body markers identify it.
+ *
+ * Each substring must ONLY ever appear on that shape — a bare "captcha"
+ * would fire on any normal page mentioning widgets (and widgets already
+ * have their own markers above).
+ *
+ * Detection ≠ solvability: no built-in solver claims Amazon pages; this
+ * exists so error/reporting paths can name the wall honestly.
+ */
+const AMAZON_ROBOT_CHECK_MARKERS = [
+  // <title>/h1 text on the wall.
+  "Robot Check",
+  // The challenge form posts to /errors/validateCaptcha.
+  "validateCaptcha",
+  // The other copy variant of the same bot page.
+  "Sorry, we just need to make sure you're not a robot",
 ];
 
 /** Extract the first `data-sitekey` in the document — via the SDK's own extract(). */
@@ -52,9 +76,12 @@ function extractSitekey(html: string): string | undefined {
  *
  * `cloudflare-interstitial` is detected on 403/503 responses carrying the
  * `cf-mitigated: challenge` header or Cloudflare challenge-platform tokens in
- * the body. Widget types (turnstile/recaptcha/hcaptcha) are detected by markup
- * at any status — per the detection contract, presence of the widget IS the
- * marker.
+ * the body. `amazon-robot-check` is Amazon's full-page "Robot Check" wall —
+ * served at 200, matched on body substrings that only appear on that shape.
+ * Page-level checks run before widget markup: a wall that happens to embed
+ * a widget-shaped token is still the wall. Widget types
+ * (turnstile/recaptcha/hcaptcha) are detected by markup at any status — per
+ * the detection contract, presence of the widget IS the marker.
  */
 export function detectChallenge(input: {
   /** Final response URL (scrubbed). */
@@ -82,6 +109,18 @@ export function detectChallenge(input: {
     return {
       url,
       type: "cloudflare-interstitial",
+      sitekey: extractSitekey(html),
+      html,
+      ...context,
+    };
+  }
+
+  // Full-page bot checks before widget markup — a challenge wall IS the
+  // page, so it outranks any widget-shaped token embedded in it.
+  if (AMAZON_ROBOT_CHECK_MARKERS.some((marker) => html.includes(marker))) {
+    return {
+      url,
+      type: "amazon-robot-check",
       sitekey: extractSitekey(html),
       html,
       ...context,
