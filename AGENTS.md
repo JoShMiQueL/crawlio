@@ -31,9 +31,9 @@ A library, not a hosted service. Non-goals, in order of importance:
 | `bun install` | install deps (`bun.lock` is the canonical lockfile) |
 | `bun run lint` | Biome lint + format check |
 | `bun run lint:fix` | Biome with `--write` (safe autofix) |
-| `bun run typecheck` | `tsc --noEmit` + `tsc --noEmit -p tsconfig.test.json` |
+| `bun run typecheck` | `tsc --noEmit` + `-p tsconfig.test.json` + `-p tsconfig.scripts.json` + `-p tsconfig.e2e.json` |
 | `bun test test/` | bun:test — Bun's own runner (NOT vitest); the CI bun-lane suite |
-| `bun run e2e` | packed-tarball consumer e2e — build → `npm pack` → install into a tmp project → `bun test` on `e2e/render.test.ts` (Bun only) |
+| `bun run e2e` | packed-tarball consumer e2e — build → `npm pack` → `npm install` into a tmp project → the packed `crawlio install` does the engine setup → `bun test` on `e2e/render.test.ts` (Bun only) |
 | `bun run test` | vitest, single run — the `vitest` .bin shim executes it under node, so this is the SAME lane as `npm run test` |
 | `bun run test:types` | `tsc --noEmit -p tsconfig.test.json` (type-only assertions in `test/types.test.ts`) |
 | `bun run build` | `tsc -p tsconfig.build.json` → `dist/` |
@@ -51,8 +51,8 @@ under Bun instead).
 
 - `src/` — library source. Compiled to `dist/` by `tsc` (`rootDir: ./src`). Public surface re-exported from `src/index.ts`.
 - `test/` — vitest specs + `test/fixtures.ts` (loader). Not in the `tsconfig.json` project, but typechecked by `tsconfig.test.json`. `test/fixtures/` holds recorded HTML; `test/types.test.ts` holds compile-time-only (`expectTypeOf`) assertions enforced by `bun run typecheck`, not by `bun test`.
-- `e2e/` — the real-browser consumer e2e (`e2e/render.test.ts`), gated on `CRAWLIO_E2E=1`. It imports `crawlio`/`crawlio/playwright` — never `src/` — and only runs via `bun run e2e` (scripts/e2e.ts): build → `npm pack` → `bun add` the tarball into a tmp consumer project → `bun test` there. Keep it out of `test/` include globs and any tsconfig `include` — `bun:test`/`crawlio` do not resolve under vitest or `tsc` in a fresh checkout.
-- `tsconfig.json` (base, `src` only) / `tsconfig.test.json` (`src` + `test`, `noEmit`) / `tsconfig.build.json` (build-only; excludes `dist`, `node_modules`, `src/**/*.test.ts`).
+- `e2e/` — the real-browser consumer e2e (`e2e/render.test.ts`), gated on `CRAWLIO_E2E=1`. It imports `crawlio`/`crawlio/playwright` — never `src/` — and only runs via `bun run e2e` (scripts/e2e.ts): build → `npm pack` → `npm install` the tarball into a tmp consumer project → the packed `crawlio install` fetches playwright-core + chromium → `bun test` there. Keep it out of `test/` include globs — `bun:test`/`crawlio` do not resolve under vitest; typecheck coverage lives in the dedicated `tsconfig.e2e.json` (paths→src, no build needed).
+- `tsconfig.json` (base, `src` only) / `tsconfig.test.json` (`src` + `test`, `noEmit`) / `tsconfig.build.json` (build-only; excludes `dist`, `node_modules`, `src/**/*.test.ts`) / `tsconfig.e2e.json` (`e2e`, `noEmit`, `bun-types` + `paths` mapping `crawlio` imports to `src/`).
 
 ## Hard rules for agents
 

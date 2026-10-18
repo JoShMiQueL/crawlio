@@ -62,7 +62,7 @@
     "build": "tsc -p tsconfig.build.json",
     "build:bin": "bun scripts/build-bin.ts",
     "e2e": "bun scripts/e2e.ts",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p tsconfig.scripts.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p tsconfig.scripts.json && tsc --noEmit -p tsconfig.e2e.json",
     "test:types": "tsc --noEmit -p tsconfig.test.json",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

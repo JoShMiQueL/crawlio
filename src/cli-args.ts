@@ -650,23 +650,42 @@ const PM_COMMANDS: Record<
  * - playwright: `<pm> add playwright-core` as a dev dependency, then `<dlx>
  *   playwright-core install <browser>` — `playwright-core` ships its own
  *   CLI, so no extra package is needed for the browser download.
+ *   `options.withDeps` inserts `--with-deps` into that step so playwright
+ *   also installs the browser's OS-level libraries (Linux only — what a
+ *   fresh CI image needs).
  * - puppeteer: `<pm> add puppeteer-core`, then `<dlx> puppeteer browsers
  *   install chrome` — `puppeteer-core` itself never downloads a browser;
  *   the `puppeteer` package's `@puppeteer/browsers` CLI does (dlx fetches
  *   it on demand). Alternatively configure `channel`/`executablePath` and
- *   skip the download.
+ *   skip the download. `--with-deps` is playwright-only — combined with
+ *   this engine it is a {@link ConfigError}.
  */
 export function installCommands(
   engine: "playwright" | "puppeteer",
   browser: string,
   pm: PackageManager,
+  options: { withDeps?: boolean } = {},
 ): InstallCommand[] {
   const { add, dlx } = PM_COMMANDS[pm];
   if (engine === "playwright") {
     return [
       { command: add.command, args: [...add.args, "playwright-core"] },
-      { command: dlx.command, args: [...dlx.args, "playwright-core", "install", browser] },
+      {
+        command: dlx.command,
+        args: [
+          ...dlx.args,
+          "playwright-core",
+          "install",
+          ...(options.withDeps ? ["--with-deps"] : []),
+          browser,
+        ],
+      },
     ];
+  }
+  if (options.withDeps) {
+    throw new ConfigError(
+      "`--with-deps` is playwright-only — `puppeteer browsers install` has no system-deps step",
+    );
   }
   return [
     { command: add.command, args: [...add.args, "puppeteer-core"] },

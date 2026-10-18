@@ -270,7 +270,7 @@ crawlio scrape <url> [--fields 'title=h1;links=a.href@all'] [--render auto|alway
 crawlio map <url> [--limit N]
 crawlio crawl <url> [--max-depth N] [--max-pages N]
 crawlio search <query> [--provider brave|serper|tavily|module] [--api-key <key>] [--limit N] [--json]
-crawlio install [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--dry-run]
+crawlio install [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--with-deps] [--dry-run]
 crawlio --help | --version
 ```
 
@@ -324,7 +324,11 @@ crawlio --help | --version
   (`npm i -D`, `pnpm add -D`, `bun add -d`, `yarn add -D`), then runs the
   pm's npx-equivalent (`npx`, `pnpm dlx`, `bunx`, `yarn dlx`) for
   `playwright-core install <browser>` or `puppeteer browsers install
-  chrome`. `--mcp` instead runtime-installs `@modelcontextprotocol/sdk`
+  chrome`. `--with-deps` forwards to `playwright-core install` so the
+  browser's OS-level libraries come along too (apt on Linux — what a
+  fresh box or CI image needs; playwright-only, rejected under
+  `--engine puppeteer`). `--mcp` instead runtime-installs
+  `@modelcontextprotocol/sdk`
   and `zod` (`pnpm add`, no `-D` — the `crawlio-mcp`/`crawlio/mcp` peer
   deps run inside your own server process; the SDK's own peer contract
   makes `zod` required); alone it is the whole plan, combined with
@@ -745,7 +749,8 @@ Honest limits:
 
 The repo e2e (`e2e/render.test.ts`) exercises all of this against a real
 chromium — and against the real artifact: `bun run e2e` packs the tarball,
-installs it into a throwaway consumer project, and runs the suite there.
+`npm install`s it into a throwaway consumer project where the packed
+`crawlio install` does the engine setup, and runs the suite there.
 
 ## Custom providers and renderers
 

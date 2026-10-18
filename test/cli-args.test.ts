@@ -337,6 +337,21 @@ describe("installCommands — the crawlio install plan", () => {
     ]);
   });
 
+  it("playwright --with-deps: the flag lands inside the install step", () => {
+    expect(installCommands("playwright", "chromium", "npm", { withDeps: true })).toEqual([
+      { command: "npm", args: ["install", "--save-dev", "playwright-core"] },
+      { command: "npx", args: ["playwright-core", "install", "--with-deps", "chromium"] },
+    ]);
+  });
+
+  it("puppeteer --with-deps: ConfigError — the flag is playwright-only", () => {
+    // `puppeteer browsers install` has no system-deps step, so the flag
+    // would be silently dropped — fail loudly instead.
+    expect(() => installCommands("puppeteer", "chromium", "npm", { withDeps: true })).toThrow(
+      ConfigError,
+    );
+  });
+
   it("--mcp: runtime-adds @modelcontextprotocol/sdk + zod (no dev flag) per pm", () => {
     // Both run inside the user's crawlio-mcp/crawlio/mcp process — runtime
     // deps, so the dev-install spellings (`-D`/`--save-dev`/`-d`) must NOT
