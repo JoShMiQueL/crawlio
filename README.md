@@ -585,9 +585,12 @@ What it covers, all HTTP-layer:
 - **Jittered pacing** — `requestDelay` also accepts `{ min, max }`, sampled
   uniformly per request.
 - **CAPTCHA solver hook** — `solver` is a
-  `{ solve(challenge) => Promise<CaptchaSolution> }` seam. When a challenge
-  page is detected (Cloudflare interstitial, Turnstile, reCAPTCHA, hCaptcha
-  markers), the solver runs once and the request is retried once with the
+  `{ solve(challenge) => Promise<CaptchaSolution> }` seam. Detection is
+  two-tier: vendor-unique signatures (Cloudflare interstitials,
+  Turnstile/reCAPTCHA/hCaptcha widgets, and the Amazon/PerimeterX/DataDome/
+  Akamai/Incapsula bot-walls) plus a conservative `generic-bot-check`
+  fallback for unbranded walls. When a challenge the solver `claims` is
+  detected, the solver runs once and the request is retried once with the
   returned cookies + bound User-Agent. `capSolver` is the built-in for
   Cloudflare interstitials via the paid CapSolver API
   (`CAPSOLVER_API_KEY` env):

@@ -1,4 +1,4 @@
-import { detectChallenge } from "./captcha.js";
+import { detectChallenge, PAGE_BLOCK_TYPES } from "./captcha.js";
 import { crawlImpl } from "./crawl.js";
 import {
   ConfigError,
@@ -740,12 +740,10 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
       if (
         challenge !== null &&
         proxyPool !== null &&
-        (challenge.type === "cloudflare-interstitial" ||
-          challenge.type === "amazon-robot-check" ||
-          result.status >= 400)
+        (PAGE_BLOCK_TYPES.has(challenge.type) || result.status >= 400)
       ) {
-        // Interstitials and full-page bot checks are always blocks — a 200-
-        // served wall like Amazon's "Robot Check" is still burned egress, not
+        // Full-page walls are always blocks — a 200-served wall (Amazon's
+        // "Robot Check", an unbranded generic wall) is still burned egress, not
         // content. Widget markers only count on error statuses — a captcha
         // widget embedded in a 200 form page is content, not a ban. (403/503-
         // status challenges already recorded by the status path are
@@ -756,6 +754,14 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
       if (!solverConfigured || solverAttempted || challenge === null) return finalize(result);
       const solver = merged.solver;
       if (solver === undefined) return finalize(result);
+      // The solver's `claims` list is its say in which shapes it can handle —
+      // a wall it does not claim skips the solve entirely (and the paid
+      // provider call it would have burned) and surfaces as the wall
+      // body/error itself. Without `claims`, the solver sees every detected
+      // challenge and decides for itself.
+      if (solver.claims !== undefined && !solver.claims.includes(challenge.type)) {
+        return finalize(result);
+      }
       solverAttempted = true;
 
       let solution: CaptchaSolution;

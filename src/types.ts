@@ -198,10 +198,28 @@ export interface CaptchaChallenge {
   url: string;
   /**
    * Challenge type detected. Detection names the wall, it does NOT claim
-   * solvability — no built-in solver handles `amazon-robot-check` pages;
-   * the type exists so error/reporting paths can identify them honestly.
+   * solvability — no built-in solver handles the wall types; they exist
+   * so error/reporting paths can identify them honestly.
+   *
+   * The wall types (`cloudflare-interstitial`, `amazon-robot-check`,
+   * `perimeterx`, `datadome`, `akamai`, `incapsula`) are full-page bot
+   * checks served in place of content; the widget types
+   * (`turnstile`/`recaptcha`/`hcaptcha`) name a widget embedded IN
+   * content. `generic-bot-check` is the low-confidence fallback for
+   * unbranded walls — signals consistent with a bot check, not a
+   * positive identification.
    */
-  type: "turnstile" | "recaptcha" | "hcaptcha" | "cloudflare-interstitial" | "amazon-robot-check";
+  type:
+    | "turnstile"
+    | "recaptcha"
+    | "hcaptcha"
+    | "cloudflare-interstitial"
+    | "amazon-robot-check"
+    | "perimeterx"
+    | "datadome"
+    | "akamai"
+    | "incapsula"
+    | "generic-bot-check";
   /** Extracted `sitekey`/`data-sitekey` when present. */
   sitekey?: string;
   /**
@@ -289,6 +307,17 @@ export type ProxyRotation = "per-origin" | "per-request" | "on-ban";
  * and rate limits still apply.
  */
 export interface CaptchaSolver {
+  /**
+   * Challenge types this solver can attempt — the optional claim list.
+   *
+   * When present, the scraper calls {@link CaptchaSolver.solve} only for
+   * these types: a detected wall the solver does not claim surfaces to
+   * the caller as the wall body/error itself, instead of a solver
+   * rejection. When absent, `solve` is invoked for every detected
+   * challenge and the solver decides — reject unclaimed types yourself.
+   * The built-ins declare `["cloudflare-interstitial"]`.
+   */
+  claims?: readonly CaptchaChallenge["type"][];
   /**
    * Solve a detected challenge.
    *

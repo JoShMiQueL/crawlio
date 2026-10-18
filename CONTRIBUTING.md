@@ -63,6 +63,25 @@ consumers. If both lanes should behave identically, write the Node API
 
 Releases are tag-driven and automated — see [RELEASING.md](RELEASING.md).
 
+## Adding a challenge signature
+
+`detectChallenge` (`src/captcha.ts`) is a catalog of vendor-unique markers —
+community rows are welcome under this bar:
+
+- **Vendor-unique substrings only.** A marker must appear ONLY on that
+  vendor's wall, never on normal pages behind the product. Injected
+  snippets that ride every protected page (Incapsula's
+  `/_Incapsula_Resource` path, Akamai's `/akam/` sensor URL, DataDome's
+  `js.datadome.co/tags.js`) are NOT markers — they would brand normal pages
+  as walls.
+- **Evidence.** Link the marker to a real wall page (capture, vendor docs,
+  or a reputable writeup) in the PR.
+- **Fixtures.** One positive test (a minimal HTML snippet carrying the
+  marker) and one negative test (a normal page that must not match) per
+  signature — see `test/stealth.test.ts`.
+- The catch-all is the `generic-bot-check` tier, not looser markers. If a
+  vendor has no verifiable unique substring, do not ship a fuzzy one.
+
 ## What not to build
 
 - No browser actions (click/fill/type) — crawlio is a scraper; automation

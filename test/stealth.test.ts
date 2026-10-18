@@ -593,3 +593,126 @@ describe("captcha solver", () => {
     expect(calls).toHaveLength(1);
   });
 });
+
+describe("challenge detection — vendor walls and the generic tier", () => {
+  const detect = (html: string, status = 200) =>
+    detectChallenge({
+      url: "https://example.com/",
+      status,
+      headers: new Headers(HTML_HEADERS),
+      html,
+    });
+
+  it("detects a PerimeterX (HUMAN) wall", () => {
+    // The real wall: captcha script from the captcha.* CDN subdomain, a
+    // `px-captcha` div, and the `window._pxCaptcha` driver object.
+    const html =
+      '<html><head><script src="https://captcha.px-cdn.net/PXuD89a1/captcha.js?a=c&u=b"></script></head>' +
+      '<body><div id="px-captcha"></div><script>window._pxCaptcha = {};</script></body></html>';
+    expect(detect(html)?.type).toBe("perimeterx");
+  });
+
+  it("detects a DataDome wall", () => {
+    const html =
+      '<html><body><iframe src="https://geo.captcha-delivery.com/interstitial/?initialCid=abc"></iframe></body></html>';
+    expect(detect(html)?.type).toBe("datadome");
+  });
+
+  it("detects an Akamai Bot Manager wall", () => {
+    // The wall sets the bm_sz/_abck cookies from inline markup JS; a deny
+    // page pulls its assets from errors.edgesuite.net.
+    const html =
+      '<html><head><title>Access Denied</title></head><body><script>document.cookie = "_abck=AA==~-1~-1~";</script></body></html>';
+    expect(detect(html)?.type).toBe("akamai");
+  });
+
+  it("detects an Incapsula (Imperva) wall", () => {
+    const html =
+      "<html><body><h1>Request unsuccessful.</h1><p>Incapsula incident ID: 471000210000012345</p></body></html>";
+    expect(detect(html)?.type).toBe("incapsula");
+  });
+
+  it("flags an unbranded sparse challenge page as generic-bot-check", () => {
+    // Signal A (wall copy + challenge form action) AND signal B (no real
+    // content) — the joint signature of a vendor-less bot wall.
+    const html =
+      '<html><head><title>Security check</title></head><body><p>Are you a robot?</p><form action="/botwall/verify"><input/></form></body></html>';
+    expect(detect(html)?.type).toBe("generic-bot-check");
+  });
+
+  it("fires on a challenge artifact alone when the page is thin", () => {
+    // No copy phrase needed — the challenge-shaped form action IS signal A.
+    const html =
+      '<html><body><form action="/challenge-gateway/verify"><input name="t"/></form></body></html>';
+    expect(detect(html)?.type).toBe("generic-bot-check");
+  });
+
+  it("does NOT fire on a content-rich page that mentions captchas", () => {
+    // Signal B fails: real copy outranks the wall phrases it contains.
+    const text = "This page explains how a captcha works and why sites deploy one. ".repeat(20);
+    const html = `<html><body><h1>Captcha docs</h1><p>${text}</p><p>human verification, verify you are human, security check</p></body></html>`;
+    expect(detect(html)).toBeNull();
+  });
+
+  it("does NOT fire on a sparse SPA shell without challenge artifacts", () => {
+    // Signal A fails: thin content is not, by itself, a wall.
+    const html =
+      '<html><head><title>App</title></head><body><div id="root"></div><script src="/assets/app.9f2e1.js"></script></body></html>';
+    expect(detect(html)).toBeNull();
+  });
+
+  it("vendor signatures keep precedence over the generic tier", () => {
+    // A DataDome iframe on a thin page ALSO satisfies both generic
+    // signals — the named vendor type must win.
+    const html =
+      '<html><body><p>security check</p><iframe src="https://geo.captcha-delivery.com/captcha/?x=1"></iframe></body></html>';
+    expect(detect(html)?.type).toBe("datadome");
+  });
+
+  it("does not invoke a solver whose claims exclude the detected wall", async () => {
+    const { impl, calls } = recordingFetch(
+      () =>
+        new Response(
+          '<html><head><title>Robot Check</title></head><body><form action="/errors/validateCaptcha"></form></body></html>',
+          { status: 200, headers: HTML_HEADERS },
+        ),
+    );
+    let solves = 0;
+    const solver: CaptchaSolver = {
+      claims: ["cloudflare-interstitial"],
+      solve: async () => {
+        solves += 1;
+        return {};
+      },
+    };
+    const scraper = createScraper({ fetch: impl, robots: false, retries: 0, solver });
+    const result = await scraper.fetchHtml("https://example.com/");
+    // The wall body is served — no solve attempted, no retry, no ConfigError.
+    expect(result.status).toBe(200);
+    expect(solves).toBe(0);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a solver without a claims list still sees every detected challenge", async () => {
+    const { impl, calls } = recordingFetch((n) =>
+      n === 1
+        ? new Response(
+            '<html><head><title>Robot Check</title></head><body><form action="/errors/validateCaptcha"></form></body></html>',
+            { status: 200, headers: HTML_HEADERS },
+          )
+        : okHtml(),
+    );
+    const seen: CaptchaChallenge[] = [];
+    const solver: CaptchaSolver = {
+      solve: async (challenge) => {
+        seen.push(challenge);
+        return {};
+      },
+    };
+    const scraper = createScraper({ fetch: impl, robots: false, retries: 0, solver });
+    const result = await scraper.fetchHtml("https://example.com/");
+    expect(result.status).toBe(200);
+    expect(seen[0]?.type).toBe("amazon-robot-check");
+    expect(calls).toHaveLength(2); // solver-decides: it saw the wall and retried
+  });
+});
