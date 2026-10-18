@@ -45,6 +45,22 @@ Non-goals:
 | **Compiled binaries** | `bun build --compile` produces standalone `crawlio`/`crawlio-mcp` executables with no runtime to install. |
 | **2 runtime deps** | cheerio + undici — and undici loads only on the Node lane. Everything else is internal or an optional peer. |
 
+### Why not just Playwright?
+
+Playwright drives a browser — a different tool for a different layer. Most
+scraping targets are static HTML, where a browser is ~150 MB of binary and
+hundreds of MB of RAM per instance to deliver what a single HTTP request
+already returns. And the browser is only step one: robots.txt handling,
+retries with backoff, per-origin politeness, proxy rotation, typed field
+extraction, sitemap traversal, and agent-facing MCP tools are all yours to
+build on top of it.
+
+crawlio is the scraping product around the transport: `renderMode: "auto"`
+tries plain HTTP first and escalates to a real browser only when the page
+needs one — and the injected engine *is* `playwright-core`. crawlio doesn't
+compete with Playwright; it uses it as an optional backend for the pages
+that actually require it.
+
 ## Install
 
 ```sh
