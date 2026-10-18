@@ -1,0 +1,38 @@
+name: Bug report
+description: Something crawlio does is wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Minimal code — the spec/options matter more than the URL.
+      render: ts
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime
+      description: e.g. "node 26.12.0" or "bun 1.4.3" — and `crawlio` version
+      placeholder: "node 26.12.0, crawlio 0.1.0"
+    validations:
+      required: true
+  - type: checkboxes
+    id: opts
+    attributes:
+      label: In play (if relevant)
+      options:
+        - label: proxies
+        - label: render (playwright)
+        - label: render (puppeteer)
+        - label: stealth
+        - label: robots disabled
+        - label: MCP server
