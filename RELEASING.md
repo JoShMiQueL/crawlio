@@ -81,7 +81,8 @@ attestation comes from the CI publish path afterwards.
 Then connect the repo on npmjs.com: package **Settings → Trusted
 Publisher → GitHub Actions**, with owner `JoShMiQueL`, repository
 `crawlio`, and no environment. npm binds each publisher to a workflow
-filename, so configure **two** publishers (npm allows up to 10):
+filename, so configure **two** publishers (npm allows multiple trusted
+publishers per package):
 `release-please.yml` for the bot path and `release.yml` for the manual
 tag path.
 
