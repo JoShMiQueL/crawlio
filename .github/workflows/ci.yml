@@ -22,10 +22,10 @@ jobs:
       code: ${{ steps.filter.outputs.code }}
     steps:
       # Needed for push events (git diff); PRs use the API but harmless
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: dorny/paths-filter@v4
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
           filters: |
@@ -40,6 +40,31 @@ jobs:
               - 'biome.json'
               - '.github/workflows/**'
 
+  # Meta lane — platform-independent checks (biome/tsc/publint/attw) run
+  # once here instead of duplicating per-OS in the check matrix. npm run
+  # keeps them on node, same as before. build before check:pack — publint
+  # and attw's pack consume dist/.
+  meta:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.3"
+
+      - run: bun install --frozen-lockfile
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run check:pack
+
   check:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -53,27 +78,27 @@ jobs:
           - os: windows-2025
             node: 26
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Bun is the toolchain's PM; node is the RUNTIME under test. npm run
       # below executes the node_modules/.bin shims with their node shebang,
       # so the checks prove the library works when nothing runs under Bun.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           # Pinned for a reproducible lane — same exact-pin policy as the
           # Node matrix (no floating "latest").
           bun-version: "1.4.3"
 
       - run: bun install --frozen-lockfile
-      - run: npm run lint
-      - run: npm run typecheck
+      # Meta checks are platform-independent — lint/typecheck/pack live in
+      # the meta job; this lane is runtime coverage (test/build on the
+      # real node).
       - run: npm run test
       - run: npm run build
-      - run: npm run check:pack
 
   # Bun lane — runtime-class coverage ("does the suite run under the Bun
   # runtime") plus the compiled binaries: one OS, no full check —
@@ -83,8 +108,8 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4.3"
       - run: bun install --frozen-lockfile
@@ -119,28 +144,37 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The consumer runs npm/npx — setup-node puts it on our supported
       # floor; the runner's stock node is below engines and would warn.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26"
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4.3"
       - run: bun install --frozen-lockfile
+      # playwright-core's version pins the chromium revision, so bun.lock
+      # is the cache key; ~/.cache/ms-playwright is playwright's default
+      # browser dir on Linux.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('bun.lock') }}
       # --with-deps forwards to `crawlio install`, which passes it through
       # to `playwright-core install`, apt-installing chromium's system
       # libraries inside the consumer project.
       - run: bun scripts/e2e.ts --with-deps
 
   ci-success:
-    needs: [changes, check, check-bun, e2e-browsers]
+    needs: [changes, meta, check, check-bun, e2e-browsers]
     if: always()
     runs-on: ubuntu-26.04
     steps:
       - run: |
           if [ "${{ needs.changes.result }}" = "failure" ] || [ "${{ needs.changes.result }}" = "cancelled" ]; then exit 1; fi
+          meta="${{ needs.meta.result }}"
+          if [ "$meta" = "failure" ] || [ "$meta" = "cancelled" ]; then exit 1; fi
           result="${{ needs.check.result }}"
           if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then exit 1; fi
           bun="${{ needs.check-bun.result }}"

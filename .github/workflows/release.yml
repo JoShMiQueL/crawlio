@@ -12,13 +12,13 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       # Tag push checks out the tagged commit; GITHUB_REF_NAME is the tag.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26"
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4.3"
 
@@ -65,24 +65,25 @@ jobs:
       id-token: write # OIDC for npm provenance / trusted publishing
       contents: write # gh release create
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26"
 
-      # `npm publish` runs the `prepack` script (`bun run check && bun run
-      # build`), so this job needs the bun toolchain + devDeps too —
-      # otherwise dist/ is missing and the tarball ships empty.
-      - uses: oven-sh/setup-bun@v2
+      # dist/ is built explicitly below — `--ignore-scripts` skips the
+      # `prepack` (`bun run check && bun run build`), which would re-run
+      # the whole suite `verify` already proved on this same commit.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4.3"
       - run: bun install --frozen-lockfile
+      - run: bun run build
 
-      # Trusted publishing needs npm >= 11.5.1; runner-bundled versions
-      # drift, so upgrade before publishing.
-      - run: npm i -g npm@latest
-      - run: npm publish --provenance --access public
+      # Trusted publishing needs npm >= 11.5.1; pinned to the documented
+      # floor (no floating "latest" — same exact-pin policy as actions).
+      - run: npm i -g npm@11.15.0
+      - run: npm publish --provenance --access public --ignore-scripts
 
       - run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
         env:
