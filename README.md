@@ -14,7 +14,7 @@ Pre-1.0 — the API may still change.
 | scrape — fetch + typed extraction over HTTP | done |
 | Politeness controls — robots.txt, per-origin serialization, delays, concurrency cap | done |
 | Stealth (opt-in) — browser header profiles, cookie jar, referer chain, jitter | done |
-| CAPTCHA solver seam — `solve` interface + built-in `capSolver` | done |
+| CAPTCHA solver seam — `solve` interface + built-ins `capSolver`, `flareSolverr` | done |
 | `map` — discover all URLs on a site | done |
 | `crawl` — recursive same-site traversal | done |
 | Proxies — pool routing with rotation and ban-aware health checks | done |
@@ -579,6 +579,23 @@ What it covers, all HTTP-layer:
   apply. And the TLS fingerprint still applies — Bun's BoringSSL is the
   closer-to-Chrome lane.
 
+  `flareSolverr` is the second built-in — same seam, a self-hosted
+  FlareSolverr instance solving in a real browser:
+
+  ```ts
+  const scraper = createScraper({
+    solver: flareSolverr(), // endpoint defaults to http://localhost:8191
+  });
+  ```
+
+  Its honest trade-off: no API key, no per-solve fee — but you run the
+  browser, a heavyweight companion service versus CapSolver's thin API.
+  Co-located it needs no proxy: the browser exits the host's public IP,
+  which is exactly the egress a direct-connection retry uses. Behind a
+  proxy pool the IP-binding rule returns — the challenge's `proxyUrl`
+  (or `flareSolverr({ proxy })`) is forwarded so the solve rides the same
+  egress. Widget types stay out of scope — a token is still not a retry.
+
 Honest ceiling — stealth here is headers, cookies, and timing. It does NOT:
 
 - mimic TLS (JA3) or HTTP/2 fingerprints — those belong to the transport;
@@ -779,7 +796,7 @@ injected, never bundled:
 | --- | --- | --- | --- |
 | Renderer | `{ render(url, options?) → RenderedPage }` (+ optional `close()`) | `createScraper({ render })` | `playwrightRenderer`, `puppeteerRenderer` |
 | Search provider | `{ search(query, options?) → SearchResult[] }` | `search(q, { provider })` | `braveSearchProvider`, `serperSearchProvider`, `tavilySearchProvider` |
-| CAPTCHA solver | `{ solve(challenge) → CaptchaSolution }` | `createScraper({ solver })` | `capSolver` (Cloudflare interstitials) |
+| CAPTCHA solver | `{ solve(challenge) → CaptchaSolution }` | `createScraper({ solver })` | `capSolver`, `flareSolverr` (Cloudflare interstitials) |
 | Fetch | `typeof globalThis.fetch` | `createScraper({ fetch })`, per call, provider adapters | undici default |
 
 A custom adapter is just a plain object satisfying the interface — no
