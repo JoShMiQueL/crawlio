@@ -2,6 +2,8 @@
 
 [![ci](https://github.com/JoShMiQueL/crawlio/actions/workflows/ci.yml/badge.svg)](https://github.com/JoShMiQueL/crawlio/actions/workflows/ci.yml)
 
+[Why crawlio](#why-crawlio) · [Install](#install) · [Node and Bun](#node-and-bun) · [Usage](#usage) · [CLI](#cli) · [MCP server](#mcp-server) · [Stealth](#stealth-opt-in) · [Proxies](#proxies) · [Rendering](#rendering-javascript-pages-render) · [Custom providers](#custom-providers-and-renderers) · [Contributing](CONTRIBUTING.md)
+
 A typed, self-hosted web-data extraction library: scrape, map, crawl, and
 search over HTTP with typed field specs, plus a pluggable renderer for
 JS-heavy pages. A library you run in your own process — not a hosted API.

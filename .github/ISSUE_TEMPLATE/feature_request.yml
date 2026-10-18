@@ -1,0 +1,25 @@
+name: Feature request
+description: Something crawlio should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What and why
+      description: The use case — what you're trying to extract/do that crawlio can't today.
+    validations:
+      required: true
+  - type: textarea
+    id: api
+    attributes:
+      label: Proposed API (optional)
+      description: A sketch of the option/signature you'd want.
+      render: ts
+  - type: checkboxes
+    id: boundary
+    attributes:
+      label: Boundary check
+      description: crawlio is a scraper — it never performs browser actions
+      options:
+        - label: This is extraction/fetching, not browser automation (click/fill/type)
+          required: true
