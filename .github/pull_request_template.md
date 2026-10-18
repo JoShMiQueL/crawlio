@@ -2,11 +2,7 @@
 
 <!-- What changes and why — the why matters more than the what. -->
 
-#### Test plan
-
-<!-- Check what you actually ran. CI runs the rest. -->
-
-- [ ] `bun run check` (lint + typecheck + vitest)
-- [ ] `bun test` (Bun lane)
-- [ ] Node lane verified where affected (`npm run check`)
-- [ ] CI green
+<!--
+  Run `bun run check` (and `bun test` for Bun-path changes) before pushing —
+  CI enforces it either way, local feedback is just faster.
+-->
