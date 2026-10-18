@@ -8,7 +8,7 @@
  *   crawlio map <url> [--limit N]
  *   crawlio crawl <url> [--max-depth N] [--max-pages N]
  *   crawlio search <query> [--provider brave|serper|tavily|module] [--api-key <key>] [--limit N] [--json]
- *   crawlio install [--mcp] [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--dry-run]
+ *   crawlio install [--mcp] [--engine playwright|puppeteer] [--browser chromium|firefox|webkit] [--with-deps] [--dry-run]
  */
 import { spawn } from "node:child_process";
 import { parseArgs } from "node:util";
@@ -107,10 +107,13 @@ search options:
 install options:
   --mcp                  Runtime-install @modelcontextprotocol/sdk + zod —
                          the crawlio-mcp / crawlio/mcp peer deps. Alone it is
-                         the whole plan; combined with --engine/--browser it
-                         is appended to the engine install.
+                         the whole plan; combined with --engine/--browser/
+                         --with-deps it is appended to the engine install.
   --engine playwright|puppeteer   Engine to install (default playwright).
   --browser chromium|firefox|webkit   Playwright browser (default chromium).
+  --with-deps            Also install the browser's OS-level dependencies
+                         (playwright only — apt packages on Linux; what a
+                         fresh box/CI image needs).
   --dry-run              Print the commands without running them.
 `;
 
@@ -248,6 +251,7 @@ async function main(argv: string[]): Promise<number> {
       "max-pages": { type: "string" },
       json: { type: "boolean", default: false },
       mcp: { type: "boolean", default: false },
+      "with-deps": { type: "boolean", default: false },
       "dry-run": { type: "boolean", default: false },
     },
   });
@@ -341,10 +345,13 @@ async function main(argv: string[]): Promise<number> {
       rejectSearchOnlyFlags(values, "install");
       rejectRenderOnlyFlags(values, "install");
       // `--mcp` alone installs just the MCP SDK peer; combined with
-      // --engine/--browser it is appended to the engine plan. No flags at
-      // all keeps the default engine install.
+      // --engine/--browser/--with-deps it is appended to the engine plan.
+      // No flags at all keeps the default engine install.
       const wantsEngine =
-        !values.mcp || values.engine !== undefined || values.browser !== undefined;
+        !values.mcp ||
+        values.engine !== undefined ||
+        values.browser !== undefined ||
+        values["with-deps"];
       const engine = assertEngineName(values.engine ?? "playwright");
       const browser = values.browser ?? "chromium";
       if (
@@ -358,7 +365,9 @@ async function main(argv: string[]): Promise<number> {
       }
       const pm = detectPackageManager(process.cwd());
       const commands = [
-        ...(wantsEngine ? installCommands(engine, browser, pm) : []),
+        ...(wantsEngine
+          ? installCommands(engine, browser, pm, { withDeps: values["with-deps"] })
+          : []),
         ...(values.mcp ? [mcpInstallCommand(pm)] : []),
       ];
       process.stdout.write(`Detected package manager: ${pm}\n`);

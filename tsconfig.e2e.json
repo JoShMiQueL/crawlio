@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    // dom: @types/node and bun-types both defer their globals to the DOM
+    // lib when it is present (onmessage / UseLibDomIfAvailable
+    // conditionals) — without it their TextDecoder/URL declarations
+    // collide and src/, pulled in via paths, fails to typecheck.
+    "lib": ["es2023", "dom", "dom.iterable"],
+    "types": ["node", "bun-types"],
+    // Editor/typecheck resolution only — at runtime the consumer resolves
+    // the installed tarball's exports map; packed-type checking stays
+    // attw/publint's job. paths→src resolves without a dist/ build, so a
+    // fresh checkout typechecks too.
+    "paths": {
+      "crawlio": ["./src/index.ts"],
+      "crawlio/playwright": ["./src/render/playwright.ts"]
+    }
+  },
+  "include": ["e2e"]
+}

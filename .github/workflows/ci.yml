@@ -108,11 +108,12 @@ jobs:
       - run: ./dist-bin/crawlio-mcp --help
       - run: ./dist-bin/crawlio --version
 
-  # Real-browser consumer lane — scripts/e2e.ts packs the tarball, installs
-  # it into a throwaway project with playwright-core (+ chromium), and runs
-  # the CRAWLIO_E2E-gated e2e/render.test.ts against `crawlio` /
-  # `crawlio/playwright` like a real consumer. Same `code` gate; when it
-  # skips, ci-success reads the skipped result as a pass below.
+  # Real-browser consumer lane — scripts/e2e.ts packs the tarball, `npm
+  # install`s it into a throwaway project where the packed `crawlio install`
+  # fetches playwright-core (+ chromium), and runs the CRAWLIO_E2E-gated
+  # e2e/render.test.ts against `crawlio` / `crawlio/playwright` like a real
+  # consumer. Same `code` gate; when it skips, ci-success reads the skipped
+  # result as a pass below.
   e2e-browsers:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -123,8 +124,9 @@ jobs:
         with:
           bun-version: "1.4.3"
       - run: bun install --frozen-lockfile
-      # --with-deps forwards to `playwright-core install` inside the
-      # consumer project, apt-installing chromium's system libraries.
+      # --with-deps forwards to `crawlio install`, which passes it through
+      # to `playwright-core install`, apt-installing chromium's system
+      # libraries inside the consumer project.
       - run: bun scripts/e2e.ts --with-deps
 
   ci-success:
