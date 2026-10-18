@@ -196,6 +196,10 @@ export function capSolver(options: CapSolverOptions = {}): CaptchaSolver {
   };
 
   return {
+    // Only CF interstitials are claimed — the scraper never hands walls or
+    // widgets to solve(); the type check below stays as the guard for
+    // direct calls on this solver.
+    claims: ["cloudflare-interstitial"],
     async solve(challenge: CaptchaChallenge, { signal }): Promise<CaptchaSolution> {
       if (challenge.type !== "cloudflare-interstitial") {
         throw new Error(

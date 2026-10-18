@@ -440,6 +440,29 @@ describe("scraper-level proxy behaviour (via __proxyPool seam)", () => {
     expect(calls.map((c) => c.proxyUrl)).toEqual([P1, P2]);
   });
 
+  it("a 200-served generic bot-check wall reports a ban and rebinds", async () => {
+    // generic-bot-check joins the page-block set: an unbranded sparse wall
+    // (challenge artifact + no real content) is burned egress, same as the
+    // named vendor walls.
+    const { factory, calls } = recordingFactory((proxyUrl) =>
+      proxyUrl === P1
+        ? new Response(
+            '<html><body><p>Are you a robot?</p><form action="/wall/verify"></form></body></html>',
+            { status: 200, headers: { "content-type": "text/html" } },
+          )
+        : okHtml(),
+    );
+    const scraper = scraperWithHooks(
+      { fetchFactory: factory },
+      { proxies: [P1, P2], proxyRotation: "on-ban" },
+    );
+    const first = await scraper.fetchHtml("https://a.example/1", { robots: false, retries: 0 });
+    expect(first.status).toBe(200);
+    const result = await scraper.fetchHtml("https://a.example/2", { robots: false, retries: 0 });
+    expect(result.status).toBe(200);
+    expect(calls.map((c) => c.proxyUrl)).toEqual([P1, P2]);
+  });
+
   it("routes map's robots/sitemap probe through the bound proxy", async () => {
     const { factory, calls } = recordingFactory((_proxyUrl, url) => {
       if (url === "https://example.com/robots.txt") {
