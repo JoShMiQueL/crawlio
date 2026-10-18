@@ -98,6 +98,17 @@ function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
 }
 
 /**
+ * Read an opt-in env flag: `1`/`true`/`yes`/`on` (any case) enable it,
+ * everything else — including absent, blank, or `0`/`false` — leaves it
+ * off. A security flag needs an unambiguous affirmative, never mere
+ * presence.
+ */
+function envFlag(env: NodeJS.ProcessEnv, name: string): boolean {
+  const value = envValue(env, name);
+  return value !== undefined && ["1", "true", "yes", "on"].includes(value.toLowerCase());
+}
+
+/**
  * Resolve the `crawlio-mcp` renderer from the environment — the binary's
  * equivalent of the CLI's `--render` engine flags:
  *
@@ -475,6 +486,12 @@ export function createCrawlioTools(deps: CrawlioToolsDeps = {}): CrawlioTools {
   const env = deps.env ?? process.env;
   const scraper = createScraper({
     ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }),
+    // The opt-in SSRF guard, env-configured like the renderer: MCP clients
+    // hand the server arbitrary URLs — the textbook SSRF shape — so
+    // `CRAWLIO_BLOCK_PRIVATE_HOSTS=1` on the crawlio-mcp process refuses
+    // private/reserved targets. Off without the flag (localhost targets are
+    // legitimate for self-hosted users).
+    ...(envFlag(env, "CRAWLIO_BLOCK_PRIVATE_HOSTS") ? { blockPrivateHosts: true } : {}),
   });
   // Resolved once, on first need — never eagerly at server start (a browser
   // engine is expensive even to import) and shared by every tool call. A

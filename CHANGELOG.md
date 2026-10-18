@@ -18,3 +18,5 @@
 - CAPTCHA solver seam — user-provided `solve` interface
 - Bun runtime support — `isBun` flag; under Bun, proxies route via `fetch`'s native `proxy` option instead of undici dispatchers, and `crawlio-mcp --transport http` serves via `Bun.serve` (`createCrawlioMcpFetchHandler` on the SDK's `WebStandardStreamableHTTPServerTransport`)
 - `build:bin` — `bun build --compile` standalone binaries for `crawlio` and `crawlio-mcp` into `dist-bin/` (engine peers stay external, version stamped from package.json)
+- `blockPrivateHosts` (opt-in) — SSRF guard refusing private/reserved IP literals and DNS answers before the request fires, rechecked on every redirect hop and on robots.txt probes; refusals throw `BlockedHostError` (`CRAWLIO_BLOCK_PRIVATE_HOSTS=1` on `crawlio-mcp`)
+- `maxBodyBytes` — response body size cap (10 MiB default, `Infinity` disables; sitemaps capped at the 50 MiB protocol max, robots.txt at 512 KiB); over-cap responses throw `ResponseTooLargeError`

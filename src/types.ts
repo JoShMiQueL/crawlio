@@ -331,6 +331,56 @@ export interface FetchHtmlOptions {
    */
   robots?: boolean;
   /**
+   * Opt-in SSRF guard — OFF by default, since self-hosted callers
+   * legitimately scrape intranet and localhost targets.
+   *
+   * When `true`, every request's host is vetted before the wire request
+   * fires: private/reserved IP literals are refused outright, and hostnames
+   * are resolved via DNS first — a refusal throws {@link BlockedHostError}
+   * (`code: "blocked-host"`, never retried). Blocked ranges cover IPv4
+   * private/loopback/link-local/CGNAT/benchmarking/documentation/multicast/
+   * reserved space (10/8, 127/8, 169.254/16 — including the cloud metadata
+   * endpoint 169.254.169.254 — 172.16/12, 192.168/16, 100.64/10, 0/8,
+   * 192.0.0/24, 192.0.2/24, 198.18/15, 198.51.100/24, 203.0.113/24, 224/4,
+   * 240/4) and IPv6 (::1, fe80::/10, fc00::/7, ff00::/8), with
+   * IPv4-embedded forms (`::ffff:`-mapped, `::`-compatible, 6to4, NAT64
+   * 64:ff9b::/96 and 64:ff9b:1::/48) classified by their embedded address.
+   * The range list is NOT exhaustive — it is a high-value denylist, not a
+   * full IANA special-registry mirror. The check re-runs on EVERY redirect
+   * hop — a `Location` pivot to a private target is refused too — and
+   * applies to the robots.txt probe (whose redirects are followed
+   * hop-by-hop while the guard is on).
+   *
+   * Honest limit — this is lookup-time gating (TOCTOU): the hostname is
+   * re-resolved at connect time by the runtime's own resolver, which this
+   * check cannot observe, so a determined host can rebind between lookup
+   * and connect. A custom `fetch` that follows redirects internally also
+   * bypasses the per-hop check (its reported final `response.url` is still
+   * vetted). With `render`, only the initial navigation target is vetted —
+   * redirects and subresources the page pulls INSIDE the browser are not.
+   * With `proxy`/`proxies` the DNS check resolves locally while the proxy
+   * resolves the same name independently, so the guard is correspondingly
+   * less meaningful. For strict isolation, run crawlio in a
+   * network-restricted environment (egress firewall/allowlist).
+   *
+   * As an instance default on `createScraper`, a per-call `false`
+   * overrides an instance-level `true` — the same precedence as `robots`.
+   */
+  blockPrivateHosts?: boolean;
+  /**
+   * Maximum response body size in bytes. Default
+   * {@link DEFAULT_MAX_BODY_BYTES} (10 MiB).
+   *
+   * A `Content-Length` over the cap fails fast without reading the body; a
+   * chunked or lengthless body is streamed and aborted mid-read once the
+   * cap is exceeded — either way a {@link ResponseTooLargeError}
+   * (`code: "response-too-large"`, carrying `bytes` and `limit`, never
+   * retried). The cap applies per response and counts the DECODED bytes the
+   * runtime hands back. `Infinity` disables the cap; the value must be a
+   * positive number otherwise.
+   */
+  maxBodyBytes?: number;
+  /**
    * Serialize requests to the same origin. Defaults to true: one request per
    * origin at a time (the queue keys on `target.origin`, so http and https on
    * the same host are different origins). When false, same-origin requests may
@@ -503,6 +553,15 @@ export interface ScraperOptions {
   retries?: number;
   /** Instance default for {@link FetchHtmlOptions.robots}. Defaults to true. */
   robots?: boolean;
+  /**
+   * Instance default for {@link FetchHtmlOptions.blockPrivateHosts} — the
+   * opt-in private-network (SSRF) guard. Off by default; set `true` when the
+   * URLs come from untrusted input. See the option's docs for the blocked
+   * ranges and the TOCTOU limit.
+   */
+  blockPrivateHosts?: boolean;
+  /** Instance default for {@link FetchHtmlOptions.maxBodyBytes}. */
+  maxBodyBytes?: number;
   /** Instance default for {@link FetchHtmlOptions.serializePerOrigin}. */
   serializePerOrigin?: boolean;
   /** Instance default for {@link FetchHtmlOptions.requestDelay}. */

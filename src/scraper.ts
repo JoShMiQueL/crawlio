@@ -7,6 +7,8 @@ import {
   RobotsError,
   ScrapeError,
   scrubUrl,
+  showJson,
+  showValue,
   TimeoutError,
 } from "./errors.js";
 import { extract, extractAll } from "./extract.js";
@@ -20,6 +22,7 @@ import {
 import { pLimit } from "./limit.js";
 import { mapImpl } from "./map.js";
 import { parseHtml } from "./parse.js";
+import { assertPublicHost, type HostLookup, systemHostLookup } from "./private-hosts.js";
 import { defaultFetch, PROXY_FETCH_CONFLICT, ProxyPool, type ProxyPoolOptions } from "./proxy.js";
 import { isLikelyDynamic, type RenderedPage } from "./render.js";
 import { withRetries } from "./retry.js";
@@ -65,6 +68,12 @@ const MAX_CRAWL_DELAY_MS = 30_000;
  */
 interface InternalScraperOptions extends ScraperOptions {
   __proxyPool?: Pick<ProxyPoolOptions, "fetchFactory" | "now" | "banThreshold" | "cooldownMs">;
+  /**
+   * DNS resolver override for `blockPrivateHosts` — the same `__dnsLookup`
+   * test seam fetch.ts accepts, forwarded to page fetches and the robots.txt
+   * probes. Instance-level only; not public API.
+   */
+  __dnsLookup?: HostLookup;
 }
 
 // Bun.sleep is the identical promise without the setTimeout wrapper — only
@@ -128,31 +137,8 @@ function sampleRequestDelay(delay: RequestDelay | undefined): number {
  * Anything else (negative, NaN/Infinity, malformed range, wrong runtime type)
  * is a {@link ConfigError}.
  */
-/**
- * Format a rejected option value for a {@link ConfigError} message without
- * ever throwing: a circular object or a hostile `toJSON` would make a bare
- * `JSON.stringify` raise a raw TypeError, escaping the taxonomy it was
- * formatting a message for.
- */
-function showValue(value: unknown): string {
-  if (typeof value !== "object" || value === null) return showString(value);
-  return showJson(value);
-}
-function showJson(value: unknown): string {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return showString(value);
-  }
-}
-// `toString` is user-controlled too — a throwing `toString` must not escape.
-function showString(value: unknown): string {
-  try {
-    return String(value);
-  } catch {
-    return "[unserializable]";
-  }
-}
+// `showValue`/`showJson` — the throw-proof ConfigError value formatters —
+// live in errors.js, shared with the fetch/robots validation paths.
 
 function isValidRequestDelay(delay: RequestDelay | undefined): boolean {
   if (delay === undefined) return true;
@@ -192,6 +178,8 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     timeout: options.timeout ?? DEFAULT_TIMEOUT,
     retries: options.retries ?? DEFAULT_RETRIES,
     robots: options.robots ?? true,
+    blockPrivateHosts: options.blockPrivateHosts,
+    maxBodyBytes: options.maxBodyBytes,
     serializePerOrigin: options.serializePerOrigin ?? true,
     requestDelay: options.requestDelay ?? 0,
     concurrency: options.concurrency ?? DEFAULT_CONCURRENCY,
@@ -251,6 +239,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
   const fetchImpl: typeof globalThis.fetch = defaults.fetch ?? defaultFetch;
 
   function mergedOptions(call: FetchHtmlOptions | ScrapeOptions | undefined): FetchHtmlOptions & {
+    __dnsLookup?: HostLookup;
     baseUrl?: string | URL;
     parseOptions?: ScrapeOptions["parseOptions"];
     concurrency?: number;
@@ -261,6 +250,11 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
       timeout: call?.timeout ?? defaults.timeout,
       retries: call?.retries ?? defaults.retries,
       robots: call?.robots ?? defaults.robots,
+      blockPrivateHosts: call?.blockPrivateHosts ?? defaults.blockPrivateHosts,
+      maxBodyBytes: call?.maxBodyBytes ?? defaults.maxBodyBytes,
+      // Instance-level DNS seam — forwarded into fetchHtmlOnce and the
+      // robots.txt probes (see InternalScraperOptions).
+      __dnsLookup: (options as InternalScraperOptions).__dnsLookup,
       serializePerOrigin: call?.serializePerOrigin ?? defaults.serializePerOrigin,
       requestDelay: call?.requestDelay ?? defaults.requestDelay,
       stealth: call?.stealth ?? defaults.stealth,
@@ -295,6 +289,8 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     fetchImpl: typeof globalThis.fetch,
     timeout: number,
     signal: AbortSignal | undefined,
+    blockPrivateHosts?: boolean,
+    lookup?: HostLookup,
   ): Promise<RobotsAgent | null> {
     const key = robotsKeys.get(origin);
     let cached = robotsCache.get(origin);
@@ -304,6 +300,8 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
         timeout,
         fetch: fetchImpl,
         signal,
+        blockPrivateHosts,
+        __dnsLookup: lookup,
       }).then((result) => {
         if (result.kind === "failed") {
           // A failed robots fetch must not poison the cache: allow-all is a
@@ -465,6 +463,27 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
         url: target.toString(),
       });
     }
+    // `blockPrivateHosts` is fail-closed like `robots` — a non-boolean must
+    // error, never silently disable the guard (`blockPrivateHosts: 1`
+    // would otherwise read as "off").
+    if (merged.blockPrivateHosts !== undefined && typeof merged.blockPrivateHosts !== "boolean") {
+      const shown = showValue(merged.blockPrivateHosts);
+      throw new ConfigError(`\`blockPrivateHosts\` must be a boolean, got ${shown}`, {
+        url: target.toString(),
+      });
+    }
+    // `Infinity` is the documented "cap disabled" spelling; NaN fails
+    // `!(x > 0)` too.
+    if (
+      merged.maxBodyBytes !== undefined &&
+      (typeof merged.maxBodyBytes !== "number" || !(merged.maxBodyBytes > 0))
+    ) {
+      const shown = showValue(merged.maxBodyBytes);
+      throw new ConfigError(
+        `\`maxBodyBytes\` must be a positive number of bytes (Infinity disables), got ${shown}`,
+        { url: target.toString() },
+      );
+    }
     if (!isValidRequestDelay(merged.requestDelay)) {
       const shown = showValue(merged.requestDelay);
       throw new ConfigError(
@@ -620,6 +639,8 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
         effectiveFetch,
         merged.timeout ?? DEFAULT_TIMEOUT,
         merged.signal,
+        merged.blockPrivateHosts === true,
+        merged.__dnsLookup,
       );
       if (!robotsAllowed(agent, result.url, userAgent)) {
         throw new RobotsError(
@@ -804,6 +825,8 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
             effectiveFetch,
             merged.timeout ?? DEFAULT_TIMEOUT,
             merged.signal,
+            merged.blockPrivateHosts === true,
+            merged.__dnsLookup,
           );
           if (!robotsAllowed(agent, target.toString(), userAgent)) {
             throw new RobotsError(`robots.txt disallows ${scrubUrl(target.toString())}`, {
@@ -834,6 +857,27 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
          */
         const renderOnce = async (): Promise<FetchHtmlResult> => {
           if (renderer === undefined) throw new ConfigError("No renderer configured");
+          // `blockPrivateHosts` vetoes the navigation target before the
+          // browser is launched — in `always` mode the static fetch (and its
+          // own per-hop check) never runs, so this is the only gate. The
+          // initial navigation is vetted; redirects and subresources the
+          // page pulls INSIDE the browser cannot be — strict isolation still
+          // wants an egress firewall (see the option's docs).
+          if (merged.blockPrivateHosts === true) {
+            try {
+              await assertPublicHost(target.toString(), merged.__dnsLookup ?? systemHostLookup);
+            } catch (cause) {
+              // A resolver failure here is a transport error, not a renderer
+              // failure — normalize it the way fetchHtmlOnce`s own catch
+              // does, so the taxonomy holds and `auto` falls back the way
+              // the static path would.
+              if (cause instanceof ScrapeError) throw cause;
+              throw new FetchError("Private-host check failed", {
+                url: target.toString(),
+                cause,
+              });
+            }
+          }
           if (crawlDelayMs > 0) await sleep(crawlDelayMs, merged.signal);
           let page: RenderedPage;
           try {
@@ -1122,10 +1166,26 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     map: async (url, opts) => {
       const merged = mergedOptions(opts);
       // map's own robots.txt probe bypasses fetchHtmlImpl's option
-      // validation, so mirror the two checks the probe consumes.
+      // validation, so mirror the checks the probe consumes — including
+      // `blockPrivateHosts`: a non-boolean must error here, not silently
+      // read as "off" and fire an unguarded probe. `maxBodyBytes` is
+      // forwarded to the sitemap fetches, so it validates the same way.
       if (merged.robots !== undefined && typeof merged.robots !== "boolean") {
         const shown = showValue(merged.robots);
         throw new ConfigError(`\`robots\` must be a boolean, got ${shown}`);
+      }
+      if (merged.blockPrivateHosts !== undefined && typeof merged.blockPrivateHosts !== "boolean") {
+        const shown = showValue(merged.blockPrivateHosts);
+        throw new ConfigError(`\`blockPrivateHosts\` must be a boolean, got ${shown}`);
+      }
+      if (
+        merged.maxBodyBytes !== undefined &&
+        (typeof merged.maxBodyBytes !== "number" || !(merged.maxBodyBytes > 0))
+      ) {
+        const shown = showValue(merged.maxBodyBytes);
+        throw new ConfigError(
+          `\`maxBodyBytes\` must be a positive number of bytes (Infinity disables), got ${shown}`,
+        );
       }
       if (
         merged.timeout !== undefined &&
@@ -1166,6 +1226,12 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
         return await mapImpl(fetchHtmlImpl, url, {
           ...opts,
           robots: merged.robots,
+          // The private-host guard must reach the sitemap robots.txt probe
+          // too — it fires before any page fetch (same reason `robots` and
+          // `timeout` are resolved explicitly here).
+          blockPrivateHosts: merged.blockPrivateHosts,
+          __dnsLookup: merged.__dnsLookup,
+          maxBodyBytes: merged.maxBodyBytes,
           timeout: merged.timeout,
           signal: merged.signal,
           // Page fetches must see the RAW `fetch` (undefined unless the caller

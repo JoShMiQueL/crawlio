@@ -12,7 +12,9 @@
  * Renderer config is env-only: CRAWLIO_ENGINE=playwright|puppeteer (plus
  * CRAWLIO_BROWSER/CRAWLIO_CHANNEL/CRAWLIO_EXECUTABLE_PATH) or
  * CRAWLIO_RENDERER=<module specifier> for a custom adapter — see the
- * README's "MCP server" section. Tool logic lives in mcp-tools.ts, the
+ * README's "MCP server" section. CRAWLIO_BLOCK_PRIVATE_HOSTS=1 enables the
+ * opt-in SSRF guard (refuse private/reserved IP targets). Tool logic lives
+ * in mcp-tools.ts, the
  * protocol wiring in mcp-server.ts and the flag parsing in cli-args.ts;
  * this file owns only process wiring: transports, the HTTP listener and
  * renderer shutdown on exit.
@@ -49,10 +51,11 @@ Options:
 The HTTP endpoint is served on every path; http://<host>:<port>/mcp is
 the conventional client URL.
 
-Environment (renderer and search config — see the README "MCP server"
-section):
+Environment (renderer, SSRF guard and search config — see the README "MCP
+server" section):
   CRAWLIO_ENGINE, CRAWLIO_BROWSER, CRAWLIO_CHANNEL,
   CRAWLIO_EXECUTABLE_PATH, CRAWLIO_RENDERER
+  CRAWLIO_BLOCK_PRIVATE_HOSTS (=1 to refuse private/reserved IP targets)
   BRAVE_API_KEY, SERPER_API_KEY, TAVILY_API_KEY
 `;
 
