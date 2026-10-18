@@ -103,8 +103,28 @@ jobs:
       - run: ./dist-bin/crawlio-mcp --help
       - run: ./dist-bin/crawlio --version
 
+  # Real-browser lane — playwright-core + a downloaded chromium run the
+  # CRAWLIO_E2E-gated suite in test/e2e-render.test.ts. Same `code` gate;
+  # when it skips, ci-success reads the skipped result as a pass below.
+  e2e-browsers:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.3"
+      - run: bun install --frozen-lockfile
+      # playwright-core's own CLI: downloads the browser AND (--with-deps)
+      # the system libraries headless chromium needs.
+      - run: bunx playwright-core install --with-deps chromium
+      - run: bun test test/e2e-render.test.ts
+        env:
+          CRAWLIO_E2E: "1"
+
   ci-success:
-    needs: [changes, check, check-bun]
+    needs: [changes, check, check-bun, e2e-browsers]
     if: always()
     runs-on: ubuntu-26.04
     steps:
@@ -114,4 +134,6 @@ jobs:
           if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then exit 1; fi
           bun="${{ needs.check-bun.result }}"
           if [ "$bun" = "failure" ] || [ "$bun" = "cancelled" ]; then exit 1; fi
+          e2e="${{ needs.e2e-browsers.result }}"
+          if [ "$e2e" = "failure" ] || [ "$e2e" = "cancelled" ]; then exit 1; fi
           echo "ci: ${result} (skipped is fine — docs-only change)"
