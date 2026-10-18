@@ -49,7 +49,7 @@ under Bun instead).
 ## Project structure
 
 - `src/` — library source. Compiled to `dist/` by `tsc` (`rootDir: ./src`). Public surface re-exported from `src/index.ts`.
-- `test/` — vitest specs + `test/fixtures.ts` (loader). Not in the `tsconfig.json` project, but typechecked by `tsconfig.test.json`. `test/fixtures/` holds recorded HTML; `test/types.test.ts` holds compile-time-only (`expectTypeOf`) assertions enforced by `bun run typecheck`, not by `bun test`.
+- `test/` — vitest specs + `test/fixtures.ts` (loader). Not in the `tsconfig.json` project, but typechecked by `tsconfig.test.json`. `test/fixtures/` holds recorded HTML; `test/types.test.ts` holds compile-time-only (`expectTypeOf`) assertions enforced by `bun run typecheck`, not by `bun test`. `test/e2e-render.test.ts` is the real-browser e2e — self-skips unless `CRAWLIO_E2E=1` (the `e2e-browsers` CI job installs chromium and sets it).
 - `tsconfig.json` (base, `src` only) / `tsconfig.test.json` (`src` + `test`, `noEmit`) / `tsconfig.build.json` (build-only; excludes `dist`, `node_modules`, `src/**/*.test.ts`).
 
 ## Hard rules for agents

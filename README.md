@@ -743,6 +743,10 @@ Honest limits:
 - **Rendering is read-only** — navigate, wait, return HTML. Browser actions
   (click/fill/type) are a non-goal and live in the sibling project.
 
+The repo e2e (`test/e2e-render.test.ts`) exercises all of this against a real
+chromium: `bunx playwright-core install chromium`, then `CRAWLIO_E2E=1 bun test
+test/e2e-render.test.ts`.
+
 ## Custom providers and renderers
 
 The built-in adapters cover the common cases — this section is for custom
