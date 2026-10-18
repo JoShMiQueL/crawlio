@@ -2,6 +2,7 @@ import { type CheerioAPI, load } from "cheerio";
 import { normalizeLink, sameOriginLinks } from "./crawl.js";
 import { ConfigError, scrubUrl } from "./errors.js";
 import { parseHtml } from "./parse.js";
+import type { HostLookup } from "./private-hosts.js";
 import { fetchRobotsTxt, robotsUrlFor } from "./robots.js";
 import type { MapEntry, MapOptions, MapResult, Scraper } from "./types.js";
 
@@ -23,6 +24,12 @@ import type { MapEntry, MapOptions, MapResult, Scraper } from "./types.js";
 export interface MapImplOptions extends MapOptions {
   sitemapProbeUserAgent?: string;
   sitemapProbeFetch?: typeof globalThis.fetch;
+  /**
+   * Internal test seam — DNS resolver override for `blockPrivateHosts`,
+   * forwarded to the robots.txt probe (the `__dnsLookup` seam in fetch.ts).
+   * Not public API.
+   */
+  __dnsLookup?: HostLookup;
 }
 
 /**
@@ -31,6 +38,14 @@ export interface MapImplOptions extends MapOptions {
  * with the top-level candidates. Politeness, not a limit anyone should hit.
  */
 const MAX_SITEMAP_DOCUMENTS = 50;
+
+/**
+ * Ceiling on one sitemap document (50 MiB): the sitemap protocol's own
+ * uncompressed-file limit. Sitemap fetches default to this instead of the
+ * page-sized {@link DEFAULT_MAX_BODY_BYTES} (10 MiB) so a legitimate
+ * large sitemap isn't truncated; a caller-set `maxBodyBytes` still wins.
+ */
+export const SITEMAP_MAX_BODY_BYTES = 50 * 1024 * 1024;
 
 /**
  * The URL-discovery pass behind {@link Scraper.map}.
@@ -96,6 +111,8 @@ export async function mapImpl(
       timeout: options.timeout,
       fetch: sitemapProbeFetch ?? options.fetch,
       signal: options.signal,
+      blockPrivateHosts: options.blockPrivateHosts,
+      __dnsLookup: options.__dnsLookup,
     });
     for (const loc of agent?.getSitemaps() ?? []) {
       pushCandidate(loc, seed.toString());
@@ -119,7 +136,12 @@ export async function mapImpl(
 
     let xml: string;
     try {
-      const result = await fetchHtml(sitemapUrl, fetchOptions);
+      // A caller-set cap is respected; otherwise sitemaps get the
+      // protocol-sized ceiling rather than the 10 MiB page default.
+      const result = await fetchHtml(sitemapUrl, {
+        ...fetchOptions,
+        maxBodyBytes: fetchOptions.maxBodyBytes ?? SITEMAP_MAX_BODY_BYTES,
+      });
       xml = result.html;
     } catch {
       return;

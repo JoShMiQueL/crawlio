@@ -3,11 +3,14 @@ import {
   ConfigError,
   FetchError,
   HttpError,
+  ResponseTooLargeError,
   ScrapeError,
   scrubErrorCredentials,
   scrubUrl,
+  showValue,
   TimeoutError,
 } from "./errors.js";
+import { assertPublicHost, type HostLookup, systemHostLookup } from "./private-hosts.js";
 import { defaultFetch, PROXY_FETCH_CONFLICT, ProxyPool } from "./proxy.js";
 import { fuseSignal } from "./signal.js";
 import { headerKey, resolveStealth, stealthRequestHeaders } from "./stealth.js";
@@ -29,14 +32,21 @@ export const DEFAULT_RETRIES = 3;
  * surfaces bound retries identically.
  */
 export const MAX_RETRIES = 20;
+/**
+ * Default ceiling on a decoded response body (10 MiB): a hostile or broken
+ * target streaming gigabytes must not OOM the process. `maxBodyBytes`
+ * overrides per call; `Infinity` disables the cap.
+ */
+export const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
 
 const ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 
 /**
  * Only http(s) URLs are fetchable — `file:`, `data:`, `ftp:` are not
- * pages. This is a SCHEME-level allowlist only: redirect pivots to private
- * or loopback IP literals (127.x, 169.254.x, decimal/hex forms) remain the
- * caller's responsibility — full SSRF egress filtering is deferred.
+ * pages. This is a SCHEME-level allowlist: private/loopback IP filtering
+ * is the opt-in `blockPrivateHosts` guard (private-hosts.ts), applied per
+ * redirect hop below — without it, pivots to private or loopback targets
+ * remain the caller's responsibility.
  */
 const HTTP_PROTOCOLS: ReadonlySet<string> = new Set(["http:", "https:"]);
 
@@ -45,9 +55,9 @@ const HTTP_PROTOCOLS: ReadonlySet<string> = new Set(["http:", "https:"]);
  * `redirect: "manual"` leaves them to us so caller headers can be stripped
  * on cross-origin hops and non-http(s) targets refused.
  */
-const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
+export const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
 /** Bound on followed redirects — a redirect loop must not run forever. */
-const MAX_REDIRECTS = 20;
+export const MAX_REDIRECTS = 20;
 
 /**
  * Header names that must not cross an origin boundary on a redirect —
@@ -122,6 +132,80 @@ function overlayHeaders(
 }
 
 /**
+ * Internal test seam, deliberately NOT on the public {@link FetchHtmlOptions}
+ * (mirrors `InternalScraperOptions.__proxyPool` in scraper.ts): a DNS
+ * resolver override for `blockPrivateHosts` tests — a hostname resolving to
+ * a private address can be exercised without touching real DNS. Set it via
+ * a cast; it is not public API and may change without notice.
+ */
+interface InternalFetchHtmlOptions extends FetchHtmlOptions {
+  __dnsLookup?: HostLookup;
+}
+
+/**
+ * Read `response`'s body into memory under a hard byte ceiling.
+ *
+ * A declared `Content-Length` over `maxBytes` fails WITHOUT reading a byte —
+ * the body is cancelled so its connection can be released. A chunked or
+ * lengthless body is streamed through `response.body.getReader()` (the Web
+ * Streams API undici and Bun both implement), counting as it goes and
+ * cancelling the moment the cap is exceeded, so memory use stays ~O(cap).
+ * The `arrayBuffer()` path remains for bodies without a reader.
+ *
+ * Internal (not part of the public API) — shared with `src/robots.ts`,
+ * whose fixed 512 KiB robots.txt cap rides the same helper.
+ */
+export async function readResponseBody(
+  response: Response,
+  maxBytes: number,
+  url: string,
+): Promise<Uint8Array> {
+  const rawLength = response.headers.get("content-length");
+  const declared = rawLength === null ? undefined : Number(rawLength);
+  if (declared !== undefined && Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new ResponseTooLargeError(
+      `Response body exceeds the ${maxBytes}-byte cap — Content-Length declares ${declared}`,
+      { url, bytes: declared, limit: maxBytes },
+    );
+  }
+  const body = response.body;
+  const reader = body?.getReader?.();
+  if (reader === undefined) {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > maxBytes) {
+      throw new ResponseTooLargeError(
+        `Response body exceeds the ${maxBytes}-byte cap (${buffer.byteLength} bytes)`,
+        { url, bytes: buffer.byteLength, limit: maxBytes },
+      );
+    }
+    return new Uint8Array(buffer);
+  }
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new ResponseTooLargeError(
+        `Response body exceeds the ${maxBytes}-byte cap — aborted after ${received} bytes`,
+        { url, bytes: received, limit: maxBytes },
+      );
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+/**
  * Perform exactly one HTTP request and decode the body.
  *
  * This is deliberately the non-retried, non-robots layer: retries live in
@@ -176,6 +260,29 @@ export async function fetchHtmlOnce(
   if (!HTTP_PROTOCOLS.has(requestUrl.protocol)) {
     throw new ConfigError(
       `\`fetchHtmlOnce\` only supports http(s) URLs, got ${requestUrl.protocol}`,
+      { url },
+    );
+  }
+  // `blockPrivateHosts` is fail-CLOSED semantics (enforced when === true),
+  // so a non-boolean must error rather than silently pick "off" — `1` would
+  // otherwise disable the guard the caller meant to enable. Same rule as
+  // the `robots` flag's validation one layer up. Config validation runs
+  // BEFORE any resource allocation below (the per-call proxy pool's sockets
+  // would leak on a throw after its creation).
+  if (options.blockPrivateHosts !== undefined && typeof options.blockPrivateHosts !== "boolean") {
+    throw new ConfigError(
+      `\`blockPrivateHosts\` must be a boolean, got ${showValue(options.blockPrivateHosts)}`,
+      { url },
+    );
+  }
+  const blockPrivateHosts = options.blockPrivateHosts === true;
+  const hostLookup = (options as InternalFetchHtmlOptions).__dnsLookup ?? systemHostLookup;
+  const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  // `!(x > 0)` rejects NaN as well as zero/negatives; `Infinity` passes and
+  // simply never trips the cap — the documented "disabled" spelling.
+  if (typeof maxBodyBytes !== "number" || !(maxBodyBytes > 0)) {
+    throw new ConfigError(
+      `\`maxBodyBytes\` must be a positive number of bytes (Infinity disables), got ${showValue(options.maxBodyBytes)}`,
       { url },
     );
   }
@@ -235,6 +342,12 @@ export async function fetchHtmlOnce(
     let response: Response;
     let hops = 0;
     for (;;) {
+      // `blockPrivateHosts` re-resolves EVERY hop's host before the wire
+      // request fires — a redirect can pivot from a public name to a
+      // private literal or a hostname freshly resolving private, and the
+      // initial-URL check alone would miss it. This is a lookup-time gate
+      // (TOCTOU — see the option's docs).
+      if (blockPrivateHosts) await assertPublicHost(currentUrl, hostLookup);
       response = await impl(currentUrl, {
         // `method`/`body` exist for API-backed callers (search providers POST
         // JSON); page scraping never sets them — the scrape path rejects them
@@ -299,6 +412,23 @@ export async function fetchHtmlOnce(
       currentUrl = next.toString();
     }
 
+    // A custom impl may follow redirects internally — its reported
+    // `response.url` is then a hop the manual loop never vetted. When it
+    // matches `currentUrl` the hop was already checked, so the lookup is
+    // skipped (saves a redundant DNS resolution per fetch). The check runs
+    // before the body is read; the request itself already fired, which
+    // lookup-time gating cannot prevent (the TOCTOU caveat).
+    if (blockPrivateHosts && response.url !== "" && response.url !== currentUrl) {
+      try {
+        await assertPublicHost(response.url, hostLookup);
+      } catch (cause) {
+        // Release the response's connection before the refusal propagates —
+        // the body is never read from here.
+        await response.body?.cancel().catch(() => undefined);
+        throw cause;
+      }
+    }
+
     if (!response.ok && options.throwOnHttpError !== false) {
       throw new HttpError(`HTTP ${response.status} ${response.statusText}`.trim(), {
         url: currentUrl,
@@ -307,8 +437,7 @@ export async function fetchHtmlOnce(
       });
     }
 
-    const buffer = await response.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
+    const bytes = await readResponseBody(response, maxBodyBytes, currentUrl);
     const contentType = response.headers.get("content-type");
     const html = decodeBody(bytes, contentType);
 

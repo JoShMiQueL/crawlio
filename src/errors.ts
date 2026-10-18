@@ -16,7 +16,15 @@
  * kept as `cause`. The retry layer recognises that cause and never retries a
  * deliberate abort; a real network `FetchError` is retried.
  */
-export type ScrapeErrorCode = "fetch" | "timeout" | "http" | "parse" | "robots" | "config";
+export type ScrapeErrorCode =
+  | "fetch"
+  | "timeout"
+  | "http"
+  | "parse"
+  | "robots"
+  | "config"
+  | "blocked-host"
+  | "response-too-large";
 
 /**
  * Remove userinfo (`user:password@`) from a URL so credentials do not travel in the
@@ -232,5 +240,70 @@ export class HttpError extends ScrapeError {
 export class RobotsError extends ScrapeError {
   constructor(message: string, options?: ScrapeErrorOptions) {
     super("robots", message, options);
+  }
+}
+
+/**
+ * `blockPrivateHosts` refused the request before it fired: the URL's host is
+ * a private/reserved IP literal or resolved to one via DNS. Per-URL and
+ * deterministic (the address cannot change on a retry), so it is marked
+ * `retryable: false` — same contract as a redirect off http(s).
+ */
+export class BlockedHostError extends ScrapeError {
+  /** The private/reserved address the host literal was or resolved to. */
+  readonly address?: string;
+  constructor(message: string, options?: ScrapeErrorOptions & { address?: string }) {
+    super("blocked-host", message, { ...options, retryable: false });
+    if (options?.address !== undefined) this.address = options.address;
+  }
+}
+
+/**
+ * A response body exceeded `maxBodyBytes` — either declared up front by
+ * `Content-Length` (the body was never read) or discovered mid-stream (the
+ * read was aborted at the cap). Deterministic — the body does not shrink on
+ * retry — so it is marked `retryable: false`.
+ */
+export class ResponseTooLargeError extends ScrapeError {
+  /** Bytes seen: the declared `Content-Length`, or the count read before aborting. */
+  readonly bytes: number;
+  /** The `maxBodyBytes` ceiling that was exceeded. */
+  readonly limit: number;
+  constructor(message: string, options?: ScrapeErrorOptions & { bytes?: number; limit?: number }) {
+    super("response-too-large", message, { ...options, retryable: false });
+    this.bytes = options?.bytes ?? 0;
+    this.limit = options?.limit ?? 0;
+  }
+}
+
+/**
+ * Format a rejected option value for a {@link ConfigError} message without
+ * ever throwing: a circular object or a hostile `toJSON` would make a bare
+ * `JSON.stringify` raise a raw TypeError, escaping the taxonomy it was
+ * formatting a message for.
+ *
+ * Internal (not part of the public API) — shared by the fetch, robots and
+ * scraper validation paths.
+ */
+export function showValue(value: unknown): string {
+  if (typeof value !== "object" || value === null) return showString(value);
+  return showJson(value);
+}
+
+/** `JSON.stringify` that falls back to `String()` when serialization throws. */
+export function showJson(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return showString(value);
+  }
+}
+
+// `toString` is user-controlled too — a throwing `toString` must not escape.
+function showString(value: unknown): string {
+  try {
+    return String(value);
+  } catch {
+    return "[unserializable]";
   }
 }

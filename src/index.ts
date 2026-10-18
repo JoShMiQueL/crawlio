@@ -7,16 +7,24 @@
 export { charsetFromContentType, decodeBody, sniffCharset } from "./charset.js";
 export type { ScrapeErrorCode, ScrapeErrorOptions } from "./errors.js";
 export {
+  BlockedHostError,
   ConfigError,
   FetchError,
   HttpError,
   ParseError,
+  ResponseTooLargeError,
   RobotsError,
   ScrapeError,
   TimeoutError,
 } from "./errors.js";
 export { extract, extractAll } from "./extract.js";
-export { DEFAULT_RETRIES, DEFAULT_TIMEOUT, DEFAULT_USER_AGENT, fetchHtmlOnce } from "./fetch.js";
+export {
+  DEFAULT_MAX_BODY_BYTES,
+  DEFAULT_RETRIES,
+  DEFAULT_TIMEOUT,
+  DEFAULT_USER_AGENT,
+  fetchHtmlOnce,
+} from "./fetch.js";
 export { parseHtml } from "./parse.js";
 export type { ProxyFetchFactory, ProxyPoolOptions } from "./proxy.js";
 export { ProxyPool } from "./proxy.js";

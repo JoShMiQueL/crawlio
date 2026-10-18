@@ -45,7 +45,11 @@ describe("test source hygiene", () => {
     // re-exports it and the CHANGELOG documents it) — tests import the
     // source module directly so the runtime seam stays explicit;
     // src/robots-parser.js is the internal
-    // RFC 9309 parser exercised directly by its spec-matrix suite, and
+    // RFC 9309 parser exercised directly by its spec-matrix suite,
+    // src/private-hosts.js is the internal
+    // private-IP classifier unit-tested at its own seam (like robots-parser),
+    // src/robots.js holds the fetchRobotsTxtResult kind-triplet and the
+    // ROBOTS_MAX_BODY_BYTES cap the body-limit suite asserts on, and
     // src/render/*.js are the
     // `crawlio/playwright` and `crawlio/puppeteer` subpath exports — they
     // cannot come through index.js because their peer deps must stay
@@ -55,9 +59,11 @@ describe("test source hygiene", () => {
       "../src/errors.js",
       "../src/mcp-server.js",
       "../src/mcp-tools.js",
+      "../src/private-hosts.js",
       "../src/proxy.js",
       "../src/render/playwright.js",
       "../src/render/puppeteer.js",
+      "../src/robots.js",
       "../src/robots-parser.js",
       "../src/runtime.js",
     ]);

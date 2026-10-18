@@ -866,8 +866,18 @@ one layer down:
 
 crawlio fetches the URLs you give it — that is the feature, and the
 threat model. If URLs come from untrusted input (an MCP client, a web
-handler), SSRF gating is the caller's job: block internal ranges,
-link-local, and metadata endpoints upstream. robots.txt is honored by
+handler), the opt-in SSRF guard exists for exactly that:
+`blockPrivateHosts: true` (a `createScraper` or per-call option) refuses
+requests whose host is a private/reserved IP or resolves to one — checked
+on every redirect hop, before the request fires — and
+`CRAWLIO_BLOCK_PRIVATE_HOSTS=1` enables it on `crawlio-mcp`. It is a
+lookup-time check, so a determined host can still rebind DNS at connect;
+under `render` only the initial navigation is vetted (browser-internal
+redirects and subresources are not), and the blocked-range list is a
+high-value denylist, not exhaustive — for strict isolation,
+egress-firewall the process. Response bodies are
+capped too (`maxBodyBytes`, 10 MiB default), so a hostile target cannot
+exhaust memory. robots.txt is honored by
 default (`robots: false` opts out), the default User-Agent is
 identifiable, target URLs are http(s) — `map`/`crawl` reject other
 schemes outright — and credentials embedded in proxy URLs are scrubbed
