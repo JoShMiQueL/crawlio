@@ -17,8 +17,16 @@
  * exactly like a real consumer's → the packed bin scrapes a loopback
  * node:http page under node — the bin's real shebang runtime — proving
  * args → fetch → extract end-to-end on the node lane, plus the packed
- * failure paths (unknown subcommand, HTTP 404) and `map` against a
- * sitemap fixture.
+ * failure paths (unknown subcommand, HTTP 404), `map` against a sitemap
+ * fixture, `crawl` over a two-page link fixture (`--max-depth` wiring),
+ * `search` through a consumer-local provider-module fixture (plus the
+ * no-provider ConfigError path), `scrape --render always --renderer`
+ * through a browser-free renderer-module fixture, and the `crawlio-mcp`
+ * bin — `--help`/bad-arg parsing plus a full stdio session (the default
+ * transport, the Claude-Desktop path): a real MCP client handshake,
+ * `tools/list` and a `tools/call scrape` round-trip against the loopback
+ * fixture, with the optional `@modelcontextprotocol/sdk`/`zod` peers
+ * installed in the consumer like a real embedding setup.
  *
  * The consumer uses npm — not bun — on purpose: `npm install` writes a
  * package-lock.json, so `crawlio install`'s lockfile sniff picks npm
@@ -35,6 +43,8 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { $ } from "bun";
 import pkg from "../package.json" with { type: "json" };
 
@@ -61,9 +71,36 @@ try {
   if (!existsSync(tgz)) throw new Error(`npm pack did not produce ${tgz}`);
 
   writeFileSync(join(consumer, "package.json"), '{ "private": true, "type": "module" }\n');
+  // Consumer-local adapter modules — the `--provider`/`--renderer` module
+  // specifiers below resolve these against the consumer's cwd, the same
+  // relative-specifier branch a real user's `./x.mjs` takes through
+  // loadSearchProviderAdapter/loadRendererAdapter.
+  writeFileSync(
+    join(consumer, "search-provider.mjs"),
+    "export default {\n" +
+      '  search: async (query) => [{ url: "https://example.test/hit", title: "fixture hit for " + query }],\n' +
+      "};\n",
+  );
+  writeFileSync(
+    join(consumer, "renderer.mjs"),
+    "export default {\n" +
+      "  render: async (url) => ({\n" +
+      "    url,\n" +
+      "    status: 200,\n" +
+      '    html: "<!doctype html><html><head><title>fixture render</title></head>" +\n' +
+      '      "<body><h1>fixture-rendered heading</h1></body></html>",\n' +
+      "  }),\n" +
+      "};\n",
+  );
   // npm, not bun: the package-lock.json it writes makes `crawlio install`
   // detect npm — the PM branch worth dogfooding (see the header comment).
-  await step(`consumer install (${consumer})`, () => $`npm install ${resolve(tgz)}`.cwd(consumer));
+  // `@modelcontextprotocol/sdk` + `zod` are crawlio's OPTIONAL MCP peers —
+  // installing them in the consumer mimics a real `crawlio-mcp` embedding
+  // setup (the packed bin imports them lazily and resolves them from the
+  // consumer's node_modules).
+  await step(`consumer install (${consumer})`, () =>
+    $`npm install ${resolve(tgz)} @modelcontextprotocol/sdk zod`.cwd(consumer),
+  );
   // The REAL packed bin runs the first-run setup — bin entry, PM
   // detection, peer-dep install, browser download. `crawlio install`
   // inherits stdio, so its child output streams through.
@@ -115,6 +152,18 @@ try {
         );
       return;
     }
+    if (path === "/crawl") {
+      // The crawl fixture's seed: one same-origin link to /crawl/child,
+      // which falls through to the link-free default `page` — a two-page
+      // crawl, the smallest case exercising BFS + depth bookkeeping.
+      res
+        .writeHead(200, { "content-type": "text/html; charset=utf-8" })
+        .end(
+          "<!doctype html><html><head><title>crawl seed</title></head>" +
+            '<body><a href="/crawl/child">child</a></body></html>',
+        );
+      return;
+    }
     if (path === "/gone") {
       res.writeHead(404, { "content-type": "text/plain" }).end("gone");
       return;
@@ -155,6 +204,174 @@ try {
         !(out.urls ?? []).some((entry) => entry.url === `${base}/nested/a`)
       ) {
         throw new Error(`unexpected map output: ${stdout}`);
+      }
+    });
+
+    await step("consumer bin: crawlio crawl (node)", async () => {
+      // BFS over the two-page fixture — `pages` carries url + depth; the
+      // flags prove the arg wiring reaches the packed crawl(). A second
+      // run at --max-depth 0 must visit only the seed.
+      const stdout =
+        await $`node node_modules/crawlio/dist/cli.js crawl ${`${base}/crawl`} --max-depth 1 --max-pages 5`
+          .cwd(consumer)
+          .text();
+      const out = JSON.parse(stdout) as {
+        pages?: Array<{ url: string; depth: number }>;
+        visited?: number;
+      };
+      const pages = out.pages ?? [];
+      if (
+        out.visited !== 2 ||
+        pages.length !== 2 ||
+        pages[0]?.url !== `${base}/crawl` ||
+        pages[0]?.depth !== 0 ||
+        pages[1]?.url !== `${base}/crawl/child` ||
+        pages[1]?.depth !== 1
+      ) {
+        throw new Error(`unexpected crawl output: ${stdout}`);
+      }
+      const shallow =
+        await $`node node_modules/crawlio/dist/cli.js crawl ${`${base}/crawl`} --max-depth 0`
+          .cwd(consumer)
+          .text();
+      const shallowOut = JSON.parse(shallow) as { pages?: unknown[]; visited?: number };
+      if (shallowOut.visited !== 1 || shallowOut.pages?.length !== 1) {
+        throw new Error(`crawl --max-depth 0 should visit only the seed: ${shallow}`);
+      }
+    });
+
+    await step("consumer bin: crawlio search (node)", async () => {
+      // The `--provider` module specifier path, dogfooded with the
+      // consumer-local fixture — no API key needed. `--json` also pins
+      // the compact single-line output mode (unasserted until now).
+      const stdout =
+        await $`node node_modules/crawlio/dist/cli.js search crawlio --provider ./search-provider.mjs --json`
+          .cwd(consumer)
+          .text();
+      const results = JSON.parse(stdout) as Array<{ url?: string; title?: string }>;
+      if (
+        results.length !== 1 ||
+        results[0]?.url !== "https://example.test/hit" ||
+        results[0]?.title !== "fixture hit for crawlio" ||
+        stdout.trimEnd().includes("\n") // --json must not pretty-print
+      ) {
+        throw new Error(`unexpected search output: ${stdout}`);
+      }
+      // No provider flag and no API-key env vars → a clean ConfigError:
+      // exit 1, a single stderr line, never a stack trace. The env vars
+      // are blanked explicitly in case the host exports any of them.
+      const noProvider = await $`node node_modules/crawlio/dist/cli.js search crawlio`
+        .cwd(consumer)
+        .env({ ...process.env, BRAVE_API_KEY: "", SERPER_API_KEY: "", TAVILY_API_KEY: "" })
+        .quiet()
+        .nothrow();
+      const noProviderStderr = noProvider.stderr.toString();
+      if (
+        noProvider.exitCode !== 1 ||
+        !/needs a provider/.test(noProviderStderr) ||
+        /^\s+at /m.test(noProviderStderr)
+      ) {
+        throw new Error(
+          `crawlio search (no provider): code=${noProvider.exitCode} stderr=${noProviderStderr}`,
+        );
+      }
+    });
+
+    await step("consumer bin: crawlio scrape --render --renderer (node)", async () => {
+      // `--renderer <module>` exercises the packed loadRendererAdapter —
+      // a browser-free fixture satisfying the { render(url) } contract
+      // proves the --render wiring end-to-end; real engines are covered
+      // by render.test.ts.
+      const stdout =
+        await $`node node_modules/crawlio/dist/cli.js scrape ${base} --render always --renderer ./renderer.mjs --fields heading=h1`
+          .cwd(consumer)
+          .text();
+      if (!stdout.includes("fixture-rendered heading")) {
+        throw new Error(`scrape --renderer output is missing the fixture HTML:\n${stdout}`);
+      }
+    });
+
+    await step("consumer bin: crawlio-mcp arg parsing (node)", async () => {
+      // `--help` prints usage to STDERR — stdout stays reserved for the
+      // JSON-RPC channel — and exits 0; a bad --transport exits 1 with
+      // the ConfigError message.
+      const help = await $`node node_modules/crawlio/dist/mcp.js --help`
+        .cwd(consumer)
+        .quiet()
+        .nothrow();
+      if (
+        help.exitCode !== 0 ||
+        !/Usage:/.test(help.stderr.toString()) ||
+        help.stdout.toString() !== ""
+      ) {
+        throw new Error(
+          `crawlio-mcp --help: code=${help.exitCode} stderr=${help.stderr.toString()}`,
+        );
+      }
+      const badTransport = await $`node node_modules/crawlio/dist/mcp.js --transport bogus`
+        .cwd(consumer)
+        .quiet()
+        .nothrow();
+      if (
+        badTransport.exitCode !== 1 ||
+        !/must be "stdio" or "http"/.test(badTransport.stderr.toString())
+      ) {
+        throw new Error(
+          `crawlio-mcp --transport bogus: code=${badTransport.exitCode} stderr=${badTransport.stderr.toString()}`,
+        );
+      }
+    });
+
+    await step("consumer bin: crawlio-mcp stdio session (node)", async () => {
+      // serveStdio — the DEFAULT transport, the Claude-Desktop path —
+      // exercised end-to-end: a real MCP client spawns the PACKED bin
+      // under node (its lazy @modelcontextprotocol/sdk + zod peers
+      // resolve from the consumer install, like a real embedding),
+      // handshakes over stdio, lists the four tools and runs one scrape
+      // round-trip against the loopback fixture. The client side runs
+      // in this harness; the SERVER is the artifact under test.
+      const transport = new StdioClientTransport({
+        command: "node",
+        args: [join(consumer, "node_modules/crawlio/dist/mcp.js")],
+        cwd: consumer,
+      });
+      const client = new Client({ name: "crawlio-e2e", version: pkg.version });
+      try {
+        await client.connect(transport);
+        const { tools } = await client.listTools();
+        const names = tools
+          .map((tool) => tool.name)
+          .sort()
+          .join(",");
+        if (names !== "crawl,map,scrape,search") {
+          throw new Error(`unexpected tools/list: ${names}`);
+        }
+        const result = await client.callTool({
+          name: "scrape",
+          arguments: { url: base, fields: { title: "title", heading: "h1" } },
+        });
+        // callTool's result is a union including a legacy `toolResult`
+        // member; crawlio's tools only emit the text-content shape
+        // ({ content: [{ type: "text", text }] }), so read that member.
+        const callResult = result as {
+          content: Array<{ type: string; text?: string }>;
+          isError?: boolean;
+        };
+        if (callResult.isError === true) {
+          throw new Error(`callTool scrape failed: ${JSON.stringify(result)}`);
+        }
+        const text = callResult.content
+          .flatMap((part) =>
+            part.type === "text" && typeof part.text === "string" ? [part.text] : [],
+          )
+          .join("");
+        if (!text.includes("crawlio bin e2e") || !text.includes("cli bin heading")) {
+          throw new Error(`unexpected callTool scrape result: ${JSON.stringify(result)}`);
+        }
+      } finally {
+        // client.close() ends the subprocess's stdin — the stdio
+        // transport closes and the bin exits on its own.
+        await client.close();
       }
     });
 
