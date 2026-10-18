@@ -10,7 +10,13 @@ import {
   TimeoutError,
 } from "./errors.js";
 import { extract, extractAll } from "./extract.js";
-import { DEFAULT_RETRIES, DEFAULT_TIMEOUT, DEFAULT_USER_AGENT, fetchHtmlOnce } from "./fetch.js";
+import {
+  DEFAULT_RETRIES,
+  DEFAULT_TIMEOUT,
+  DEFAULT_USER_AGENT,
+  fetchHtmlOnce,
+  MAX_RETRIES,
+} from "./fetch.js";
 import { pLimit } from "./limit.js";
 import { mapImpl } from "./map.js";
 import { parseHtml } from "./parse.js";
@@ -65,8 +71,29 @@ interface InternalScraperOptions extends ScraperOptions {
 // the scraper-level sleeps get the swap (requestDelay pacing, crawl-delay
 // waits, map pacing). The retry backoff (src/retry.ts) keeps its own internal
 // setTimeout on both runtimes; it is not affected.
-const sleep = (ms: number): Promise<void> =>
-  isBun ? Bun.sleep(ms) : new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number, signal?: AbortSignal): Promise<void> => {
+  if (signal === undefined) {
+    return isBun ? Bun.sleep(ms) : new Promise((resolve) => setTimeout(resolve, ms));
+  }
+  // Abort-aware variant — mirrors the backoff sleep in retry.ts: a mid-sleep
+  // abort rejects with the RAW `signal.reason` (possibly not an Error), which
+  // the call sites' abort→FetchError normalization then wraps.
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+};
 
 /**
  * The User-Agent actually sent on the wire: an explicit userAgent wins
@@ -101,6 +128,32 @@ function sampleRequestDelay(delay: RequestDelay | undefined): number {
  * Anything else (negative, NaN/Infinity, malformed range, wrong runtime type)
  * is a {@link ConfigError}.
  */
+/**
+ * Format a rejected option value for a {@link ConfigError} message without
+ * ever throwing: a circular object or a hostile `toJSON` would make a bare
+ * `JSON.stringify` raise a raw TypeError, escaping the taxonomy it was
+ * formatting a message for.
+ */
+function showValue(value: unknown): string {
+  if (typeof value !== "object" || value === null) return showString(value);
+  return showJson(value);
+}
+function showJson(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return showString(value);
+  }
+}
+// `toString` is user-controlled too — a throwing `toString` must not escape.
+function showString(value: unknown): string {
+  try {
+    return String(value);
+  } catch {
+    return "[unserializable]";
+  }
+}
+
 function isValidRequestDelay(delay: RequestDelay | undefined): boolean {
   if (delay === undefined) return true;
   if (typeof delay === "number") return Number.isFinite(delay) && delay >= 0;
@@ -141,7 +194,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     robots: options.robots ?? true,
     serializePerOrigin: options.serializePerOrigin ?? true,
     requestDelay: options.requestDelay ?? 0,
-    concurrency: Math.max(1, options.concurrency ?? DEFAULT_CONCURRENCY),
+    concurrency: options.concurrency ?? DEFAULT_CONCURRENCY,
     stealth: options.stealth,
     solver: options.solver,
     fetch: options.fetch,
@@ -149,6 +202,16 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     render: options.render,
     renderMode: options.renderMode,
   };
+  // `concurrency` feeds pLimit directly — validate here so a bad value is a
+  // ConfigError, not a raw TypeError escaping the taxonomy.
+  if (
+    options.concurrency !== undefined &&
+    (!Number.isInteger(options.concurrency) || options.concurrency < 1)
+  ) {
+    throw new ConfigError(
+      `\`concurrency\` must be a positive integer, got ${showValue(options.concurrency)}`,
+    );
+  }
   const limit = pLimit(defaults.concurrency);
   // Instance-level proxies build ONE stateful pool up front — origin bindings
   // and proxy health are shared across every call on this scraper (that's
@@ -270,13 +333,18 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
    * same origin — a minimum gap between consecutive requests, not a period. The
    * first task queued on an origin has nothing to pace against and is not delayed.
    */
-  function enqueueOnOrigin<T>(origin: string, task: () => Promise<T>, delayMs = 0): Promise<T> {
+  function enqueueOnOrigin<T>(
+    origin: string,
+    task: () => Promise<T>,
+    delayMs = 0,
+    signal?: AbortSignal,
+  ): Promise<T> {
     const previous = originQueues.get(origin);
     const paced =
       previous === undefined || delayMs <= 0
         ? task
         : async (): Promise<T> => {
-            await sleep(delayMs);
+            await sleep(delayMs, signal);
             return task();
           };
     const run = (previous ?? Promise.resolve()).then(paced, paced);
@@ -317,6 +385,13 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
       target = new URL(String(url));
     } catch (cause) {
       throw new ConfigError(`Invalid URL ${scrubUrl(String(url))}`, { cause });
+    }
+    // Same allowlist `crawl`/`map`/`fetchHtmlOnce` apply — `new URL` alone
+    // accepts `file:` (Bun's fetch reads local files) and `data:`.
+    if (target.protocol !== "http:" && target.protocol !== "https:") {
+      throw new ConfigError(`Only http(s) URLs can be fetched, got ${target.protocol}`, {
+        url: target.toString(),
+      });
     }
     const origin = target.origin;
     const stealth = resolveStealth(merged.stealth);
@@ -366,21 +441,32 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     // Validate here so a bad `retries` reaches the caller as a ConfigError,
     // not a raw TypeError out of the retry loop — every thrown error must be
     // a ScrapeError.
-    if (merged.retries !== undefined && (!Number.isInteger(merged.retries) || merged.retries < 0)) {
-      throw new ConfigError(`\`retries\` must be a non-negative integer, got ${merged.retries}`, {
-        url: target.toString(),
-      });
+    if (
+      merged.retries !== undefined &&
+      (!Number.isInteger(merged.retries) || merged.retries < 0 || merged.retries > MAX_RETRIES)
+    ) {
+      throw new ConfigError(
+        `\`retries\` must be an integer between 0 and ${MAX_RETRIES}, got ${showValue(merged.retries)}`,
+        { url: target.toString() },
+      );
     }
-    if (merged.timeout !== undefined && merged.timeout < 0) {
-      throw new ConfigError(`\`timeout\` must be non-negative, got ${merged.timeout}`, {
+    if (merged.timeout !== undefined && (!Number.isFinite(merged.timeout) || merged.timeout < 0)) {
+      throw new ConfigError(
+        `\`timeout\` must be a non-negative finite number, got ${showValue(merged.timeout)}`,
+        { url: target.toString() },
+      );
+    }
+    // `robots` semantics are fail-closed (enforced unless `=== false` below),
+    // so a non-boolean must error, not silently pick an interpretation —
+    // `robots: 1` used to silently DISABLE the check.
+    if (merged.robots !== undefined && typeof merged.robots !== "boolean") {
+      const shown = showValue(merged.robots);
+      throw new ConfigError(`\`robots\` must be a boolean, got ${shown}`, {
         url: target.toString(),
       });
     }
     if (!isValidRequestDelay(merged.requestDelay)) {
-      const shown =
-        typeof merged.requestDelay === "object"
-          ? JSON.stringify(merged.requestDelay)
-          : String(merged.requestDelay);
+      const shown = showValue(merged.requestDelay);
       throw new ConfigError(
         `\`requestDelay\` must be a non-negative finite number or a \`{ min, max }\` range with 0 <= min <= max, got ${shown}`,
         { url: target.toString() },
@@ -392,7 +478,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
       merged.renderMode !== "always"
     ) {
       throw new ConfigError(
-        `\`renderMode\` must be "auto" or "always", got ${JSON.stringify(merged.renderMode)}`,
+        `\`renderMode\` must be "auto" or "always", got ${showJson(merged.renderMode)}`,
         { url: target.toString() },
       );
     }
@@ -419,7 +505,8 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     const schedule: <T>(task: () => Promise<T>) => Promise<T> =
       merged.serializePerOrigin === false
         ? (task) => task()
-        : (task) => enqueueOnOrigin(origin, task, sampleRequestDelay(merged.requestDelay));
+        : (task) =>
+            enqueueOnOrigin(origin, task, sampleRequestDelay(merged.requestDelay), merged.signal);
 
     /**
      * Merge the stealth-state headers (cookie jar, referer chain) into the
@@ -503,6 +590,45 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
       }
     };
 
+    /**
+     * robots re-check for a cross-origin redirect landing: the pre-fetch
+     * gate only consults the REQUEST origin's policy, but the redirect
+     * chain (followed hop by hop in `fetchHtmlOnce`) can land on a
+     * different origin whose robots.txt governs its own content. Denied →
+     * {@link RobotsError} — `withRetries` never retries it. Same-origin
+     * results (the common case) skip without any fetch.
+     */
+    const checkLandingRobots = async (result: FetchHtmlResult): Promise<void> => {
+      if (merged.robots === false) return;
+      let landing: URL;
+      try {
+        landing = new URL(result.url);
+      } catch {
+        // Unparseable landing URL — nothing to re-gate.
+        return;
+      }
+      // A non-http(s) landing (a custom impl's `response.url` could be a
+      // `data:`/`file:` URL) has no robots.txt to consult — probing its
+      // "null" origin would throw a non-ScrapeError inside the retried
+      // attempt.
+      if (landing.protocol !== "http:" && landing.protocol !== "https:") return;
+      const landingOrigin = landing.origin;
+      if (landingOrigin === origin) return;
+      const agent = await robotsAgentFor(
+        landingOrigin,
+        userAgent,
+        effectiveFetch,
+        merged.timeout ?? DEFAULT_TIMEOUT,
+        merged.signal,
+      );
+      if (!robotsAllowed(agent, result.url, userAgent)) {
+        throw new RobotsError(
+          `robots.txt disallows ${scrubUrl(result.url)} (redirected off ${origin})`,
+          { url: result.url },
+        );
+      }
+    };
+
     const solverConfigured = merged.solver !== undefined;
 
     /**
@@ -571,6 +697,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
         throw error;
       }
       recordResponse(result);
+      await checkLandingRobots(result);
 
       // Challenge detection runs whenever someone can act on it: a solver
       // needs the challenge data, a proxy pool needs the ban signal (a served
@@ -654,6 +781,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
         effectiveFetch,
       );
       recordResponse(retried);
+      await checkLandingRobots(retried);
       return finalize(retried);
     };
 
@@ -668,7 +796,8 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
       // them — concurrent same-origin requests wait it in parallel.)
       return limit(async () => {
         let crawlDelayMs = 0;
-        if (merged.robots === true) {
+        // Fail-closed: enforced unless explicitly disabled (`robots: false`).
+        if (merged.robots !== false) {
           const agent = await robotsAgentFor(
             origin,
             userAgent,
@@ -705,7 +834,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
          */
         const renderOnce = async (): Promise<FetchHtmlResult> => {
           if (renderer === undefined) throw new ConfigError("No renderer configured");
-          if (crawlDelayMs > 0) await sleep(crawlDelayMs);
+          if (crawlDelayMs > 0) await sleep(crawlDelayMs, merged.signal);
           let page: RenderedPage;
           try {
             page = await renderer.render(target.toString(), {
@@ -733,6 +862,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
             rendered: true,
           };
           recordResponse(rendered);
+          await checkLandingRobots(rendered);
           if (
             merged.throwOnHttpError !== false &&
             (rendered.status < 200 || rendered.status >= 300)
@@ -775,7 +905,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
         // live there, so every request path retries identically.
         const staticResult = await withRetries(
           async () => {
-            if (crawlDelayMs > 0) await sleep(crawlDelayMs);
+            if (crawlDelayMs > 0) await sleep(crawlDelayMs, merged.signal);
             return attemptOnce();
           },
           {
@@ -794,7 +924,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
             // does, so `serializePerOrigin: false` skips this too.
             const paceMs =
               merged.serializePerOrigin === false ? 0 : sampleRequestDelay(merged.requestDelay);
-            if (paceMs > 0 && merged.signal?.aborted !== true) await sleep(paceMs);
+            if (paceMs > 0 && merged.signal?.aborted !== true) await sleep(paceMs, merged.signal);
             // A caller abort that landed during the pause is the call's
             // error, not a render failure to fall back from.
             if (merged.signal?.aborted) {
@@ -815,15 +945,45 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
         return staticResult;
       });
     });
+    // An abort landing inside the origin-queue pacing sleep (or the render
+    // pacing above) rejects with the RAW `signal.reason` — possibly a bare
+    // DOMException or a non-Error. Normalize to FetchError here so only
+    // ScrapeErrors leave the SDK (withRetries wraps its own backoff the same
+    // way; its FetchError output is a ScrapeError and passes through).
+    const guarded = scheduled.catch((cause: unknown) => {
+      if (merged.signal?.aborted && !(cause instanceof ScrapeError)) {
+        throw new FetchError("Request aborted by caller", {
+          url: target.toString(),
+          cause,
+        });
+      }
+      throw cause;
+    });
     // A per-call pool is stateless — it dies with this call, so close its
     // pooled clients (undici `ProxyAgent` / `Bun.FetchSession`) when the
     // call settles rather than leaving their keep-alive sockets to
     // idle-timeout. `close()` settles best-effort and never rejects. The
     // instance pool is the scraper's — it is NOT closed here.
     if (ownedPool !== null) {
-      return scheduled.finally(() => ownedPool.close());
+      return guarded.finally(() => ownedPool.close());
     }
-    return scheduled;
+    return guarded;
+  }
+
+  /**
+   * The `concurrency` a scrapeMany* call feeds `pLimit` — validated so a bad
+   * per-call value surfaces as {@link ConfigError} rather than a raw
+   * TypeError out of the limiter (the taxonomy promise). The instance
+   * default was already validated at construction.
+   */
+  function batchConcurrency(merged: { concurrency?: number }): number {
+    const value = merged.concurrency ?? defaults.concurrency;
+    if (!Number.isInteger(value) || value < 1) {
+      throw new ConfigError(
+        `\`concurrency\` must be a positive integer, got ${showValue(merged.concurrency)}`,
+      );
+    }
+    return value;
   }
 
   /** Parse and extract from a fetched page. `baseUrl` defaults to the page URL. */
@@ -894,7 +1054,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     call?: ScrapeOptions,
   ): Promise<Array<ExtractResult<S>>> {
     const merged = mergedOptions(call);
-    const batchLimit = pLimit(Math.max(1, merged.concurrency ?? defaults.concurrency));
+    const batchLimit = pLimit(batchConcurrency(merged));
     return Promise.all(urls.map((url) => batchLimit(() => scrapeImpl(url, fields, call))));
   }
 
@@ -904,7 +1064,7 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     call?: ScrapeOptions,
   ): Promise<Array<ScrapeBatchItem<S>>> {
     const merged = mergedOptions(call);
-    const batchLimit = pLimit(Math.max(1, merged.concurrency ?? defaults.concurrency));
+    const batchLimit = pLimit(batchConcurrency(merged));
     return Promise.all(
       urls.map((url) =>
         batchLimit(async (): Promise<ScrapeBatchItem<S>> => {
@@ -961,6 +1121,20 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
     // handler.
     map: async (url, opts) => {
       const merged = mergedOptions(opts);
+      // map's own robots.txt probe bypasses fetchHtmlImpl's option
+      // validation, so mirror the two checks the probe consumes.
+      if (merged.robots !== undefined && typeof merged.robots !== "boolean") {
+        const shown = showValue(merged.robots);
+        throw new ConfigError(`\`robots\` must be a boolean, got ${shown}`);
+      }
+      if (
+        merged.timeout !== undefined &&
+        (!Number.isFinite(merged.timeout) || merged.timeout < 0)
+      ) {
+        throw new ConfigError(
+          `\`timeout\` must be a non-negative finite number, got ${showValue(merged.timeout)}`,
+        );
+      }
       // Same proxy resolution as fetchHtmlImpl so the sitemap/robots probe —
       // which bypasses the fetch pipeline — exits through the same proxy as
       // the page fetches (going direct would leak the real IP and could see

@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import type { ProxyAgent } from "undici";
-import { ConfigError, scrubUrl } from "./errors.js";
+import { ConfigError, scrubErrorCredentials, scrubUrl } from "./errors.js";
 import { isBun } from "./runtime.js";
 import type { ProxyRotation } from "./types.js";
 
@@ -353,7 +353,9 @@ export class ProxyPool {
             serve.banned = true;
             this.recordBan(origin, proxyUrl);
           }
-          throw cause;
+          // A proxy-layer error may embed the credentialed proxy URL in its
+          // message — scrub before the cause can ride an SDK error upward.
+          throw scrubErrorCredentials(cause, [proxyUrl]);
         }
       }) as FetchImpl;
       this.implByOrigin.set(origin, impl);

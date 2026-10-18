@@ -81,6 +81,26 @@ describe("map", () => {
     expect(calls).toContain("https://example.com/maps/sm.xml");
   });
 
+  it("skips a robots.txt Sitemap directive on a foreign origin", async () => {
+    // A cross-origin `Sitemap:` loc must never be fetched — the file is only
+    // authoritative for its own origin, and following it is an SSRF channel.
+    const { impl, calls } = router({
+      "https://example.com/robots.txt": {
+        body: "User-agent: *\nAllow: /\nSitemap: https://other.example/x.xml\n",
+        headers: { "content-type": "text/plain" },
+      },
+      "https://example.com/sitemap.xml": {
+        body: URLSET(`<url><loc>https://example.com/ok</loc></url>`),
+        headers: XML_HEADERS,
+      },
+    });
+    const scraper = createScraper({ fetch: impl });
+    const result = await scraper.map("https://example.com/");
+    expect(calls).not.toContain("https://other.example/x.xml");
+    expect(result.source).toBe("sitemap");
+    expect(result.urls).toEqual([{ url: "https://example.com/ok" }]);
+  });
+
   it("follows a sitemapindex into its nested sitemaps", async () => {
     const { impl } = router({
       "https://example.com/sitemap.xml": {

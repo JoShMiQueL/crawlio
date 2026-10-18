@@ -9,7 +9,6 @@ import {
   detectEngineModule,
   detectSearchProviderFromEnv,
   loadRendererAdapter,
-  loadSearchProviderAdapter,
 } from "./cli-args.js";
 import { ConfigError, ScrapeError } from "./errors.js";
 import type { Renderer, RenderMode } from "./render.js";
@@ -185,13 +184,17 @@ export async function resolveEnvRenderer(
 }
 
 /**
- * Resolve the `search` tool's provider with the CLI's precedence: an explicit
- * `provider` argument is a built-in name ({@link SEARCH_PROVIDER_NAMES}) or a
- * module specifier ({@link loadSearchProviderAdapter}); with no argument,
- * {@link detectSearchProviderFromEnv} autodetects from the API-key env vars
- * (`BRAVE_API_KEY` → `SERPER_API_KEY` → `TAVILY_API_KEY`) and zero matches is
- * a {@link ConfigError} naming all three. Credentials stay env-only — there
- * is deliberately no `apiKey` argument.
+ * Resolve the `search` tool's provider. Unlike the CLI's `--provider`
+ * ({@link resolveSearchProviderFlag}), an explicit `provider` here is
+ * ENUM-ONLY — it must be a built-in name ({@link SEARCH_PROVIDER_NAMES}).
+ * Module specifiers are deliberately not accepted on this surface: an MCP
+ * client's `provider` argument is remote input, and `import()`ing a
+ * caller-chosen specifier would be code execution on the server (the zod
+ * schema in mcp-server.ts rejects non-enum values even earlier). With no
+ * argument, {@link detectSearchProviderFromEnv} autodetects from the
+ * API-key env vars (`BRAVE_API_KEY` → `SERPER_API_KEY` → `TAVILY_API_KEY`)
+ * and zero matches is a {@link ConfigError} naming all three. Credentials
+ * stay env-only — there is deliberately no `apiKey` argument.
  */
 export async function resolveMcpSearchProvider(
   provider: string | undefined,
@@ -201,12 +204,15 @@ export async function resolveMcpSearchProvider(
     if ((SEARCH_PROVIDER_NAMES as readonly string[]).includes(provider)) {
       return provider as SearchProviderName;
     }
-    return loadSearchProviderAdapter(provider, "provider");
+    const names = SEARCH_PROVIDER_NAMES.map((name) => `"${name}"`).join(", ");
+    throw new ConfigError(
+      `\`provider\` must be a built-in name — expected one of ${names}, got ${JSON.stringify(provider)}`,
+    );
   }
   const detected = detectSearchProviderFromEnv(env);
   if (detected === undefined) {
     throw new ConfigError(
-      "The `search` tool needs a provider — pass `provider` (a built-in name or a module specifier) or set one of BRAVE_API_KEY, SERPER_API_KEY, TAVILY_API_KEY",
+      'The `search` tool needs a provider — pass `provider` ("brave", "serper" or "tavily") or set one of BRAVE_API_KEY, SERPER_API_KEY, TAVILY_API_KEY',
     );
   }
   return detected;
@@ -436,13 +442,19 @@ const TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
     name: "search",
     description:
       'Search the web through a provider. `provider` is a built-in name ("brave", "serper", ' +
-      '"tavily" — the API key comes from the matching env var) or a module specifier; omit it ' +
+      '"tavily" — the API key comes from the matching env var); omit it ' +
       "to autodetect from BRAVE_API_KEY / SERPER_API_KEY / TAVILY_API_KEY, in that order.",
     inputSchema: {
       type: "object",
       properties: {
         query: { type: "string", description: "The search query." },
-        provider: { type: "string", description: "Built-in name or adapter module specifier." },
+        // Enum, not free text — a module specifier would mean remote code
+        // loading, which is a CLI-only privilege (see the zod schema).
+        provider: {
+          type: "string",
+          enum: [...SEARCH_PROVIDER_NAMES],
+          description: "A built-in provider name.",
+        },
         limit: { type: "integer", minimum: 0, description: "Maximum results returned." },
       },
       required: ["query"],

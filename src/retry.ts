@@ -16,6 +16,10 @@ const RETRY_FACTOR = 2;
  * us to stop).
  */
 export function shouldRetry(error: unknown): boolean {
+  // An explicit retryable:false marker wins over the per-class rules —
+  // deterministic failures (a redirect off http(s), an exhausted redirect
+  // budget) cannot change on a second attempt.
+  if (error instanceof ScrapeError && error.retryable === false) return false;
   if (
     error instanceof FetchError &&
     error.cause instanceof DOMException &&

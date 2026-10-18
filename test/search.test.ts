@@ -141,6 +141,16 @@ describe("search seam", () => {
     expect(results.map((r) => r.url)).toEqual(["https://a.example/", "https://b.example/"]);
   });
 
+  it("rejects a negative or non-finite timeout", async () => {
+    // NaN/Infinity must not reach fetchHtmlOnce's setTimeout — a non-finite
+    // budget degenerates to an instant/clamped timer, so it's a ConfigError.
+    for (const timeout of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await expect(search("q", { provider: stub([]), timeout })).rejects.toBeInstanceOf(
+        ConfigError,
+      );
+    }
+  });
+
   it("rejects an invalid limit", async () => {
     await expect(search("q", { provider: stub([]), limit: -1 })).rejects.toBeInstanceOf(
       ConfigError,
@@ -167,6 +177,10 @@ describe("search seam", () => {
       ConfigError,
     );
     await expect(search("q", { provider: stub([]), retries: 0.5 })).rejects.toBeInstanceOf(
+      ConfigError,
+    );
+    // Same ceiling as the scraper surface — an unbounded count retries near-forever.
+    await expect(search("q", { provider: stub([]), retries: 21 })).rejects.toBeInstanceOf(
       ConfigError,
     );
     let seen: number | undefined;

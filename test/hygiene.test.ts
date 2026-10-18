@@ -41,8 +41,10 @@ describe("test source hygiene", () => {
     // layers (likewise a bin entry, not library surface), src/proxy.js
     // holds the internal proxyRequestInit seam — the runtime-branched
     // RequestInit extension that is deliberately not public API —
-    // src/runtime.js holds the `isBun` dual-runtime seam (likewise
-    // deliberately not public API), src/robots-parser.js is the internal
+    // src/runtime.js holds `isBun`, which IS public API (index.js
+    // re-exports it and the CHANGELOG documents it) — tests import the
+    // source module directly so the runtime seam stays explicit;
+    // src/robots-parser.js is the internal
     // RFC 9309 parser exercised directly by its spec-matrix suite, and
     // src/render/*.js are the
     // `crawlio/playwright` and `crawlio/puppeteer` subpath exports — they

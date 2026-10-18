@@ -1,4 +1,5 @@
 import { ConfigError, FetchError, ScrapeError } from "./errors.js";
+import { MAX_RETRIES } from "./fetch.js";
 import { braveSearchProvider } from "./search/brave.js";
 import { serperSearchProvider } from "./search/serper.js";
 import { tavilySearchProvider } from "./search/tavily.js";
@@ -169,15 +170,21 @@ export async function search(query: string, options: SearchOptions): Promise<Sea
   if (options.limit !== undefined && (!Number.isInteger(options.limit) || options.limit < 0)) {
     throw new ConfigError(`\`limit\` must be a non-negative integer, got ${options.limit}`);
   }
-  if (options.timeout !== undefined && options.timeout < 0) {
-    throw new ConfigError(`\`timeout\` must be non-negative, got ${options.timeout}`);
+  // Same rules as the scraper surface: a non-finite timeout collapses to an
+  // instant timer, and an unbounded retries count can retry near-forever.
+  if (options.timeout !== undefined && (!Number.isFinite(options.timeout) || options.timeout < 0)) {
+    throw new ConfigError(
+      `\`timeout\` must be a non-negative finite number, got ${options.timeout}`,
+    );
   }
 
   if (
     options.retries !== undefined &&
-    (!Number.isInteger(options.retries) || options.retries < 0)
+    (!Number.isInteger(options.retries) || options.retries < 0 || options.retries > MAX_RETRIES)
   ) {
-    throw new ConfigError(`\`retries\` must be a non-negative integer, got ${options.retries}`);
+    throw new ConfigError(
+      `\`retries\` must be an integer between 0 and ${MAX_RETRIES}, got ${options.retries}`,
+    );
   }
   // `limit: 0` is a complete answer — an empty list — so resolve it here
   // instead of spending a provider call (and its quota) on discarded hits.

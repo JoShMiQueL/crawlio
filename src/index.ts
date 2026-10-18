@@ -31,7 +31,6 @@ export {
   fetchHtml,
   map,
   scrape,
-  scrape as scrapeUrl,
   scrapeAll,
   scrapeMany,
   scrapeManySafe,

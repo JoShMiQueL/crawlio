@@ -82,9 +82,13 @@ export async function mapImpl(
   const candidates: string[] = [];
   const pushCandidate = (loc: string, base: string): void => {
     const normalized = normalizeLink(loc, base);
-    if (normalized !== undefined && !candidates.includes(normalized)) {
-      candidates.push(normalized);
-    }
+    if (normalized === undefined || candidates.includes(normalized)) return;
+    // Same-origin only: a robots.txt `Sitemap:` directive is authoritative
+    // for its own origin — a foreign loc must not send the sitemap probe
+    // off the target's origin (SSRF). `normalized` is URL-constructor
+    // output — it always reparses.
+    if (new URL(normalized).origin !== seed.origin) return;
+    candidates.push(normalized);
   };
   if (options.robots !== false) {
     const agent = await fetchRobotsTxt(robotsUrlFor(seed.toString()), {

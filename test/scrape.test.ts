@@ -298,6 +298,61 @@ describe("fetchHtml", () => {
     }
     expect(calls).toHaveLength(0);
   });
+
+  it("rejects a non-boolean robots instead of silently disabling the check", async () => {
+    const { impl, calls } = staticFetch("<html></html>");
+    // `robots: 1` used to fail the `=== true` test and silently turn the
+    // gate OFF — the fail-closed check now errors on anything non-boolean.
+    for (const robots of [1, "no", 0]) {
+      const err = await fetchHtml("https://example.com/x", {
+        fetch: impl,
+        robots: robots as unknown as boolean,
+      }).catch((e) => e);
+      expect(err, String(robots)).toBeInstanceOf(ConfigError);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects non-finite timeouts instead of an instant/clamped timer", async () => {
+    const { impl, calls } = staticFetch("<html></html>");
+    for (const timeout of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const err = await fetchHtml("https://example.com/x", {
+        fetch: impl,
+        timeout,
+        robots: false,
+      }).catch((e) => e);
+      expect(err, String(timeout)).toBeInstanceOf(ConfigError);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects retries above the ceiling", async () => {
+    const { impl, calls } = staticFetch("<html></html>");
+    const err = await fetchHtml("https://example.com/x", {
+      fetch: impl,
+      retries: 21,
+      robots: false,
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(ConfigError);
+    expect((err as Error).message).toMatch(/retries/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects a non-integer concurrency instead of pLimit's raw TypeError", async () => {
+    const { impl, calls } = staticFetch("<html></html>");
+    // Instance-level: createScraper throws ConfigError synchronously.
+    expect(() => createScraper({ concurrency: 1.5 })).toThrow(ConfigError);
+    expect(() => createScraper({ concurrency: 0 })).toThrow(ConfigError);
+    expect(() => createScraper({ concurrency: 2 })).not.toThrow();
+    // Per-call on scrapeMany: the same ConfigError, never a TypeError.
+    const scraper = createScraper({ fetch: impl, robots: false });
+    const err = await scraper
+      .scrapeMany(["https://example.com/a"], { title: "h1" }, { concurrency: 1.5 })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(ConfigError);
+    expect(err).not.toBeInstanceOf(TypeError);
+    expect(calls).toHaveLength(0);
+  });
 });
 
 describe("scrape", () => {
@@ -570,6 +625,23 @@ describe("robots", () => {
     expect(robotsUrlFor("https://a.b.com:8080/deep/path?q=1")).toBe(
       "https://a.b.com:8080/robots.txt",
     );
+  });
+
+  it("aborts out of a crawl-delay wait promptly instead of sleeping it out", async () => {
+    // Crawl-delay: 30 → capped sleep of 30s; the caller abort must reject
+    // the call NOW, wrapped as a FetchError — not after the delay elapses.
+    const { impl } = robotsFetch("User-agent: *\nCrawl-delay: 30\nAllow: /", "<html></html>");
+    const scraper = createScraper({ fetch: impl });
+    const controller = new AbortController();
+    const start = Date.now();
+    const pending = scraper
+      .fetchHtml("https://example.com/x", { robots: true, signal: controller.signal })
+      .catch((e) => e);
+    await new Promise((r) => setTimeout(r, 60));
+    controller.abort();
+    const err = await pending;
+    expect(err).toBeInstanceOf(FetchError);
+    expect(Date.now() - start).toBeLessThan(10_000);
   });
 
   it("fetchRobotsTxt returns null on missing file", async () => {

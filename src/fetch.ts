@@ -1,5 +1,13 @@
 import { decodeBody } from "./charset.js";
-import { ConfigError, FetchError, HttpError, scrubUrl, TimeoutError } from "./errors.js";
+import {
+  ConfigError,
+  FetchError,
+  HttpError,
+  ScrapeError,
+  scrubErrorCredentials,
+  scrubUrl,
+  TimeoutError,
+} from "./errors.js";
 import { defaultFetch, PROXY_FETCH_CONFLICT, ProxyPool } from "./proxy.js";
 import { fuseSignal } from "./signal.js";
 import { headerKey, resolveStealth, stealthRequestHeaders } from "./stealth.js";
@@ -15,8 +23,84 @@ export const DEFAULT_USER_AGENT = `crawlio/${VERSION}`;
 export const DEFAULT_TIMEOUT = 10_000;
 /** Default number of retries after the first attempt (4 tries in total). */
 export const DEFAULT_RETRIES = 3;
+/**
+ * Ceiling on `retries` anywhere it is accepted — a typo'd count must not
+ * retry near-forever. Shared by `createScraper` and `search` so both input
+ * surfaces bound retries identically.
+ */
+export const MAX_RETRIES = 20;
 
 const ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+
+/**
+ * Only http(s) URLs are fetchable — `file:`, `data:`, `ftp:` are not
+ * pages. This is a SCHEME-level allowlist only: redirect pivots to private
+ * or loopback IP literals (127.x, 169.254.x, decimal/hex forms) remain the
+ * caller's responsibility — full SSRF egress filtering is deferred.
+ */
+const HTTP_PROTOCOLS: ReadonlySet<string> = new Set(["http:", "https:"]);
+
+/**
+ * Redirect statuses {@link fetchHtmlOnce} follows hop by hop —
+ * `redirect: "manual"` leaves them to us so caller headers can be stripped
+ * on cross-origin hops and non-http(s) targets refused.
+ */
+const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
+/** Bound on followed redirects — a redirect loop must not run forever. */
+const MAX_REDIRECTS = 20;
+
+/**
+ * Header names that must not cross an origin boundary on a redirect —
+ * credential- or privacy-bearing. The whole `sec-fetch-*` family is
+ * stripped too: fetch metadata describes the OLD origin's request context.
+ */
+const CROSS_ORIGIN_STRIPPED = [
+  "cookie",
+  "referer",
+  "origin",
+  "authorization",
+  "proxy-authorization",
+  // A caller-set Host names the OLD origin's vhost — meaningless and
+  // misleading once the hop crosses origins.
+  "host",
+];
+
+/**
+ * Request-body headers — meaningless once a 301/302/303 rewrites to GET.
+ * `transfer-encoding` with a dropped body is a request-smuggling smell;
+ * `content-md5`/`trailer` describe body bytes that no longer exist.
+ */
+const BODY_HEADERS = [
+  "content-encoding",
+  "content-language",
+  "content-length",
+  "content-location",
+  "content-type",
+  "content-md5",
+  "transfer-encoding",
+  "trailer",
+];
+
+/**
+ * A copy of `headers` minus the names a cross-origin redirect hop must not
+ * carry: {@link CROSS_ORIGIN_STRIPPED} plus every `sec-fetch-*`, deleted
+ * case-insensitively through the Headers API.
+ */
+function stripCrossOriginHeaders(headers: Record<string, string>): Record<string, string> {
+  const cleaned = new Headers(headers);
+  for (const name of CROSS_ORIGIN_STRIPPED) cleaned.delete(name);
+  for (const name of [...cleaned.keys()]) {
+    if (name.startsWith("sec-fetch-")) cleaned.delete(name);
+  }
+  return Object.fromEntries(cleaned);
+}
+
+/** A copy of `headers` minus {@link BODY_HEADERS} — for the 30x → GET rewrite. */
+function stripBodyHeaders(headers: Record<string, string>): Record<string, string> {
+  const cleaned = new Headers(headers);
+  for (const name of BODY_HEADERS) cleaned.delete(name);
+  return Object.fromEntries(cleaned);
+}
 
 /**
  * Spread `caller` over `base` with HTTP header semantics: a caller header
@@ -58,7 +142,10 @@ function overlayHeaders(
  * @param fetchImpl Fetch implementation; defaults to {@link defaultFetch}
  *   (the env-proxy-normalized `fetch`). This is the same injection slot as
  *   `options.fetch` — a non-default impl combined with `proxy`/`proxies`
- *   is the same {@link ConfigError} conflict.
+ *   is the same {@link ConfigError} conflict. The impl MUST honor
+ *   `redirect: "manual"` — cross-origin header stripping and scheme
+ *   gating below depend on redirects reaching this function as 30x
+ *   responses rather than being followed inside the impl.
  */
 export async function fetchHtmlOnce(
   url: string,
@@ -78,7 +165,24 @@ export async function fetchHtmlOnce(
       { url },
     );
   }
+  // Scheme allowlist at the fetch choke point: `new URL` alone accepts
+  // `file:` (Bun's fetch reads local files) and `data:` — neither is a page.
+  let requestUrl: URL;
+  try {
+    requestUrl = new URL(url);
+  } catch (cause) {
+    throw new ConfigError(`Invalid URL ${scrubUrl(url)}`, { cause });
+  }
+  if (!HTTP_PROTOCOLS.has(requestUrl.protocol)) {
+    throw new ConfigError(
+      `\`fetchHtmlOnce\` only supports http(s) URLs, got ${requestUrl.protocol}`,
+      { url },
+    );
+  }
   let impl = options.fetch ?? fetchImpl;
+  // The proxy URLs this call may route through — also the credentials
+  // scrubbed from a transport error's `cause` below.
+  const proxyUrls = options.proxy !== undefined ? [options.proxy] : (options.proxies ?? []);
   // Per-call proxy routing for direct callers: a one-shot, stateless pool —
   // sticky per-origin state lives with createScraper, not here.
   let perCallPool: ProxyPool | undefined;
@@ -97,16 +201,8 @@ export async function fetchHtmlOnce(
     ) {
       throw new ConfigError(PROXY_FETCH_CONFLICT, { url });
     }
-    let origin: string;
-    try {
-      origin = new URL(url).origin;
-    } catch (cause) {
-      throw new ConfigError(`Invalid URL ${scrubUrl(url)}`, { cause });
-    }
-    perCallPool = new ProxyPool({
-      proxies: options.proxy !== undefined ? [options.proxy] : (options.proxies ?? []),
-      rotation: options.proxyRotation,
-    });
+    const origin = requestUrl.origin;
+    perCallPool = new ProxyPool({ proxies: proxyUrls, rotation: options.proxyRotation });
     impl = perCallPool.fetchFor(origin);
   }
   const stealth = resolveStealth(options.stealth);
@@ -122,23 +218,90 @@ export async function fetchHtmlOnce(
   const fused = fuseSignal(controller.signal, options.signal);
   const timer = setTimeout(() => controller.abort(), timeout);
 
+  // Redirects are followed MANUALLY, hop by hop: `redirect: "follow"` would
+  // forward caller headers (cookie/authorization/…) across origins verbatim
+  // and — under Bun — can leave http(s) entirely (a 30x to `file:` reads
+  // local files). `currentUrl` tracks the landing URL ourselves because
+  // `response.url` is not reliable under manual redirect handling.
+  let currentUrl = url;
+  let currentMethod = normalizedMethod;
+  let currentBody = options.body;
+  let currentHeaders =
+    profile === undefined
+      ? overlayHeaders({ "user-agent": userAgent, accept: ACCEPT }, options.headers)
+      : overlayHeaders({ ...profile, "user-agent": userAgent }, options.headers);
+
   try {
-    const response = await impl(url, {
-      // `method`/`body` exist for API-backed callers (search providers POST
-      // JSON); page scraping never sets them — the scrape path rejects them
-      // outright — so the wire request stays a plain GET.
-      method,
-      body: options.body,
-      headers:
-        profile === undefined
-          ? overlayHeaders({ "user-agent": userAgent, accept: ACCEPT }, options.headers)
-          : overlayHeaders({ ...profile, "user-agent": userAgent }, options.headers),
-      signal: fused.signal,
-    });
+    let response: Response;
+    let hops = 0;
+    for (;;) {
+      response = await impl(currentUrl, {
+        // `method`/`body` exist for API-backed callers (search providers POST
+        // JSON); page scraping never sets them — the scrape path rejects them
+        // outright — so the wire request stays a plain GET.
+        method: currentMethod,
+        body: currentBody,
+        headers: currentHeaders,
+        signal: fused.signal,
+        redirect: "manual",
+      });
+      const location = response.headers.get("location");
+      // A redirect status without a Location is the final answer — the same
+      // treatment `redirect: "follow"` gives it.
+      if (!REDIRECT_STATUSES.has(response.status) || location === null || location === "") break;
+      hops += 1;
+      // Release the redirect response's body so its connection can be
+      // reused — BEFORE the hop-count throw, which must not leak it.
+      if (response.body !== null) {
+        await response.body.cancel().catch(() => undefined);
+      }
+      if (hops > MAX_REDIRECTS) {
+        throw new FetchError(`Too many redirects (>${MAX_REDIRECTS}) fetching ${scrubUrl(url)}`, {
+          // Deterministic: a loop never exits on its own — do not retry.
+          url: currentUrl,
+          retryable: false,
+        });
+      }
+      let next: URL;
+      try {
+        next = new URL(location, currentUrl);
+      } catch (cause) {
+        throw new FetchError(`Unparseable redirect target ${scrubUrl(location)}`, {
+          url: currentUrl,
+          cause,
+          retryable: false,
+        });
+      }
+      if (!HTTP_PROTOCOLS.has(next.protocol)) {
+        throw new FetchError(`Refusing a redirect off http(s) to ${scrubUrl(next.toString())}`, {
+          url: currentUrl,
+          retryable: false,
+        });
+      }
+      if (next.origin !== new URL(currentUrl).origin) {
+        currentHeaders = stripCrossOriginHeaders(currentHeaders);
+      }
+      // Per the fetch spec a 301/302/303 turns a non-GET/HEAD request into a
+      // body-less GET — relevant to this function's API callers (search
+      // providers POST); page fetches are already GET. A 307/308 instead
+      // replays `currentBody` verbatim — a non-replayable body (a
+      // ReadableStream) cannot survive a second hop; search-provider POST
+      // bodies are strings, so they replay fine.
+      if (
+        (response.status === 301 || response.status === 302 || response.status === 303) &&
+        currentMethod !== "GET" &&
+        currentMethod !== "HEAD"
+      ) {
+        currentMethod = "GET";
+        currentBody = undefined;
+        currentHeaders = stripBodyHeaders(currentHeaders);
+      }
+      currentUrl = next.toString();
+    }
 
     if (!response.ok && options.throwOnHttpError !== false) {
       throw new HttpError(`HTTP ${response.status} ${response.statusText}`.trim(), {
-        url,
+        url: currentUrl,
         status: response.status,
         statusText: response.statusText,
       });
@@ -150,7 +313,9 @@ export async function fetchHtmlOnce(
     const html = decodeBody(bytes, contentType);
 
     return {
-      url: scrubUrl(response.url || url),
+      // `response.url` wins when the impl reports one (a custom fetch may
+      // still follow redirects internally); otherwise the hop we ended on.
+      url: scrubUrl(response.url || currentUrl),
       status: response.status,
       statusText: response.statusText,
       html,
@@ -158,17 +323,22 @@ export async function fetchHtmlOnce(
       headers: response.headers,
     };
   } catch (cause) {
-    if (cause instanceof HttpError) throw cause;
+    if (cause instanceof ScrapeError) throw cause;
     if (cause instanceof DOMException && cause.name === "AbortError") {
       // A caller abort is deliberately a FetchError, not a raw DOMException:
       // the taxonomy promises every SDK-thrown error is a ScrapeError. The
       // retry policy recognises the AbortError `cause` and never retries it.
       if (options.signal?.aborted) {
-        throw new FetchError("Request aborted by caller", { url, cause });
+        throw new FetchError("Request aborted by caller", { url: currentUrl, cause });
       }
-      throw new TimeoutError("Request timed out", { url, cause });
+      throw new TimeoutError("Request timed out", { url: currentUrl, cause });
     }
-    throw new FetchError(`Failed to fetch ${scrubUrl(url)}`, { url, cause });
+    throw new FetchError(`Failed to fetch ${scrubUrl(url)}`, {
+      url: currentUrl,
+      // A proxy-layer error can embed the credentialed proxy URL — scrub it
+      // out of the cause's message before it rides the FetchError.
+      cause: scrubErrorCredentials(cause, proxyUrls),
+    });
   } finally {
     clearTimeout(timer);
     fused.release();
