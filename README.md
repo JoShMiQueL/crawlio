@@ -2,14 +2,10 @@
 
 [![ci](https://github.com/JoShMiQueL/crawlio/actions/workflows/ci.yml/badge.svg)](https://github.com/JoShMiQueL/crawlio/actions/workflows/ci.yml)
 
-Simple, typed web scraping for static HTML: fetch a page, parse it, and extract
-typed fields via CSS selectors. Pre-1.0 — the API may still change.
-
-## What is crawlio
-
-A typed, self-hosted Node.js SDK for web data extraction — scrape/crawl/map/search
-over HTTP, with a pluggable renderer for JS-heavy pages. It's a library you run
-in your own process, not a hosted service.
+A typed, self-hosted web-data extraction library: scrape, map, crawl, and
+search over HTTP with typed field specs, plus a pluggable renderer for
+JS-heavy pages. A library you run in your own process — not a hosted API.
+Pre-1.0 — the API may still change.
 
 | Capability | Status |
 | --- | --- |
@@ -35,6 +31,20 @@ Non-goals:
   exists, but solving is your solver's job and success is never promised.
 - **Nothing hosted** — no API keys, no cloud component, no account.
 
+## Why crawlio
+
+| Differentiator | What it means |
+| --- | --- |
+| **Self-hosted, not SaaS** | Unlike hosted scraping APIs (Firecrawl, Decodo, …): no API keys owed to us, no per-request billing, nothing leaves your infrastructure. You own the rate limits and the data. |
+| **Typed extraction** | Field specs infer the result type — `page.title` is `string \| undefined` because the spec says so, not because you annotated it. |
+| **Dual-runtime** | Same API on Node >= 22.19 and Bun >= 1.4.3; Bun gets native upgrades — see [Node and Bun](#node-and-bun). |
+| **Polite by default** | robots.txt on, per-origin serialization, an identifiable `crawlio/<version>` User-Agent, exponential backoff with jitter. `robots: false` and `stealth: true` are explicit opt-outs. |
+| **Proxies first-class** | Per-origin rotation, ban-aware health tracking, pooled-client cleanup. |
+| **Read-only rendering** | JS rendering via Playwright/Puppeteer adapters you inject — never bundled. Scraper-only by design: no clicking, no form fills, no automation. |
+| **MCP built-in** | `crawlio-mcp` exposes the same toolkit to agents over stdio or HTTP. |
+| **Compiled binaries** | `bun build --compile` produces standalone `crawlio`/`crawlio-mcp` executables with no runtime to install. |
+| **2 runtime deps** | cheerio + undici — and undici loads only on the Node lane. Everything else is internal or an optional peer. |
+
 ## Install
 
 ```sh
@@ -43,11 +53,52 @@ bun add crawlio
 npm i crawlio
 ```
 
-Requires Node.js >= 22.19 — and runs natively on Bun >= 1.4.3, the
-preferred runtime: proxies use `Bun.FetchSession` per-proxy pools (no
-undici), the MCP HTTP server uses `Bun.serve`, and the repo toolchain
-(install, test, typecheck via `bun check`, compiled binaries via
-`bun build --compile`) is Bun end-to-end.
+Requires Node.js >= 22.19 or Bun >= 1.4.3 — see [Node and
+Bun](#node-and-bun) for what each runtime gets.
+
+## Node and Bun
+
+Same code, same API, same results on both. Node >= 22.19 is the baseline;
+Bun >= 1.4.3 is the preferred runtime and gets native upgrades where Bun
+exposes better primitives:
+
+- **Native `fetch`** — Bun's HTTP client is HTTP/2-capable; Node's global
+  fetch (undici) is HTTP/1.1.
+- **`Bun.FetchSession`** — per-proxy connection pools, each holding its own
+  TLS and keep-alive sockets. The Node lane uses undici `ProxyAgent`
+  dispatchers instead — `require()`d lazily, so undici is never loaded
+  under Bun.
+- **`Bun.serve`** — backs `crawlio-mcp --transport http`; the Node lane
+  uses `node:http`.
+- **`bun build --compile`** — `bun run build:bin` produces the standalone
+  binaries. The repo toolchain is Bun end-to-end.
+
+On TLS, honestly: Bun's TLS stack is BoringSSL — the Chromium-family stack —
+so its TLS fingerprint is closer to browser-class fingerprints than Node's
+OpenSSL one. That is a mild advantage on fingerprint-sensitive targets, not
+a guarantee — managed challenges belong to the renderer and solver seams.
+
+Identical on both runtimes: the API, extraction results, error classes,
+and the robots/retry/politeness policy. What can differ at the wire level:
+
+- TLS fingerprint — BoringSSL vs OpenSSL, above.
+- HTTP/2 negotiation — Bun negotiates h2; undici is h1.1.
+- Low-level error strings — each transport words failures its own way.
+- Ambient proxy env vars — Bun's `fetch` honors `HTTP_PROXY`/`HTTPS_PROXY`,
+  undici ignores them. crawlio pins `proxy: false` on Bun so env vars never
+  silently route on either runtime; `proxies` is the only opt-in channel.
+
+Need the wire layer identical too? `createScraper({ fetch })` accepts any
+fetch implementation — injecting undici's fetch normalizes the HTTP layer
+across runtimes (an injected `fetch` can't combine with `proxies` — see
+[Proxies](#proxies)):
+
+```ts
+import { fetch } from "undici";
+import { createScraper } from "crawlio";
+
+const scraper = createScraper({ fetch });
+```
 
 ## Usage
 
