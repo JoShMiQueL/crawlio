@@ -34,8 +34,8 @@
     "dist"
   ],
   "bin": {
-    "crawlio": "./dist/cli.js",
-    "crawlio-mcp": "./dist/mcp.js"
+    "crawlio": "dist/cli.js",
+    "crawlio-mcp": "dist/mcp.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
