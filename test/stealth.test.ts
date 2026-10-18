@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { detectChallenge } from "../src/captcha.js";
 import {
   type CaptchaChallenge,
   type CaptchaSolver,
@@ -543,6 +544,37 @@ describe("captcha solver", () => {
     const scraper = createScraper({ fetch: impl, robots: false, solver });
     await scraper.fetchHtml("https://example.com/protected", { headers });
     expect(headers).toEqual({ "x-keep": "1" });
+  });
+
+  it("detects Amazon's Robot Check wall as a full-page bot check", () => {
+    // The real page shape: <title>Robot Check</title>, a form posting to
+    // /errors/validateCaptcha — served at status 200.
+    const html =
+      '<html><head><title>Robot Check</title></head><body><form method="POST" action="/errors/validateCaptcha"><input type="text" name="field-keywords"/></form></body></html>';
+    const challenge = detectChallenge({
+      url: "https://www.amazon.com/",
+      status: 200,
+      headers: new Headers(HTML_HEADERS),
+      html,
+    });
+    expect(challenge?.type).toBe("amazon-robot-check");
+    expect(challenge?.url).toBe("https://www.amazon.com/");
+    expect(challenge?.html).toBe(html);
+  });
+
+  it("does not match a normal page merely mentioning captchas", () => {
+    // Marker tightness: the generic word "captcha" must not fire the
+    // amazon-robot-check markers — nor any widget marker.
+    const html =
+      "<html><head><title>Contact</title></head><body><p>This form is protected by a captcha.</p></body></html>";
+    expect(
+      detectChallenge({
+        url: "https://example.com/contact",
+        status: 200,
+        headers: new Headers(HTML_HEADERS),
+        html,
+      }),
+    ).toBeNull();
   });
 
   it("does not invoke the solver on a normal 200 page", async () => {

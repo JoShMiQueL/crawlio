@@ -740,12 +740,16 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
       if (
         challenge !== null &&
         proxyPool !== null &&
-        (challenge.type === "cloudflare-interstitial" || result.status >= 400)
+        (challenge.type === "cloudflare-interstitial" ||
+          challenge.type === "amazon-robot-check" ||
+          result.status >= 400)
       ) {
-        // Interstitials are always blocks; widget markers only count on error
-        // statuses — a captcha widget embedded in a 200 form page is content,
-        // not a ban. (403/503-status challenges already recorded by the
-        // status path are deduplicated inside reportBan.)
+        // Interstitials and full-page bot checks are always blocks — a 200-
+        // served wall like Amazon's "Robot Check" is still burned egress, not
+        // content. Widget markers only count on error statuses — a captcha
+        // widget embedded in a 200 form page is content, not a ban. (403/503-
+        // status challenges already recorded by the status path are
+        // deduplicated inside reportBan.)
         proxyPool.reportBan(origin);
       }
 

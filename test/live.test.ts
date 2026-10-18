@@ -152,12 +152,10 @@ describe.skipIf(!LIVE)("live", () => {
           headers: result.headers,
           html: result.html,
         });
-        // Amazon's own "Robot Check" page is a bot challenge too, but not one
-        // of detectChallenge's known marker shapes — match it honestly.
-        const challenged =
-          challenge !== null ||
-          result.html.includes("Robot Check") ||
-          result.html.includes("validateCaptcha");
+        // Amazon's "Robot Check" wall IS a detectChallenge shape now
+        // ("amazon-robot-check", matched on "Robot Check"/"validateCaptcha"
+        // markers) — the detector itself is the honest challenged signal.
+        const challenged = challenge !== null;
         const { title } = extract(parseHtml(result.html), { title: "title" });
         const servedContent =
           result.status >= 200 &&

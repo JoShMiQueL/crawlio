@@ -196,8 +196,12 @@ export interface StealthOptions {
 export interface CaptchaChallenge {
   /** The page URL that returned the challenge. */
   url: string;
-  /** Challenge type detected. */
-  type: "turnstile" | "recaptcha" | "hcaptcha" | "cloudflare-interstitial";
+  /**
+   * Challenge type detected. Detection names the wall, it does NOT claim
+   * solvability — no built-in solver handles `amazon-robot-check` pages;
+   * the type exists so error/reporting paths can identify them honestly.
+   */
+  type: "turnstile" | "recaptcha" | "hcaptcha" | "cloudflare-interstitial" | "amazon-robot-check";
   /** Extracted `sitekey`/`data-sitekey` when present. */
   sitekey?: string;
   /**

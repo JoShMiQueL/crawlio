@@ -416,6 +416,30 @@ describe("scraper-level proxy behaviour (via __proxyPool seam)", () => {
     expect(calls.map((c) => c.proxyUrl)).toEqual([P1, P2]);
   });
 
+  it("a 200-served Amazon Robot Check wall reports a ban and rebinds", async () => {
+    // amazon-robot-check arrives at status 200 — without the type check the
+    // wall would count as proxy success and the burned egress kept.
+    const { factory, calls } = recordingFactory((proxyUrl) =>
+      proxyUrl === P1
+        ? new Response(
+            '<html><head><title>Robot Check</title></head><body><form action="/errors/validateCaptcha"></form></body></html>',
+            { status: 200, headers: { "content-type": "text/html" } },
+          )
+        : okHtml(),
+    );
+    const scraper = scraperWithHooks(
+      { fetchFactory: factory },
+      { proxies: [P1, P2], proxyRotation: "on-ban" },
+    );
+    // No solver — the wall is still served to the caller (it IS the 200
+    // body), but the pool must mark P1 burned and rebind the origin.
+    const first = await scraper.fetchHtml("https://a.example/1", { robots: false, retries: 0 });
+    expect(first.status).toBe(200);
+    const result = await scraper.fetchHtml("https://a.example/2", { robots: false, retries: 0 });
+    expect(result.status).toBe(200);
+    expect(calls.map((c) => c.proxyUrl)).toEqual([P1, P2]);
+  });
+
   it("routes map's robots/sitemap probe through the bound proxy", async () => {
     const { factory, calls } = recordingFactory((_proxyUrl, url) => {
       if (url === "https://example.com/robots.txt") {

@@ -175,7 +175,7 @@ describe("type inference", () => {
     expectTypeOf<FetchHtmlOptions["solver"]>().toEqualTypeOf<CaptchaSolver | undefined>();
     expectTypeOf<ScraperOptions["solver"]>().toEqualTypeOf<CaptchaSolver | undefined>();
     expectTypeOf<CaptchaChallenge["type"]>().toEqualTypeOf<
-      "turnstile" | "recaptcha" | "hcaptcha" | "cloudflare-interstitial"
+      "turnstile" | "recaptcha" | "hcaptcha" | "cloudflare-interstitial" | "amazon-robot-check"
     >();
     expectTypeOf<CaptchaSolution["cookies"]>().toEqualTypeOf<Record<string, string> | undefined>();
     expectTypeOf<CaptchaSolver["solve"]>().toBeFunction();
