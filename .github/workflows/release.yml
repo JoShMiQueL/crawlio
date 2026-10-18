@@ -34,6 +34,22 @@ jobs:
             exit 1
           fi
 
+      # Guard: the version must be new AND above the published `latest` —
+      # npm lets an older version publish onto `latest`, which would
+      # silently downgrade the default install for consumers.
+      - name: version is unpublished and newer
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if npm view "crawlio@$version" dist.tarball --silent 2>/dev/null | grep -q .; then
+            echo "crawlio@$version is already published — bump package.json and retag" >&2
+            exit 1
+          fi
+          latest="$(npm view crawlio version --silent 2>/dev/null || true)"
+          if [ -n "$latest" ] && ! ./node_modules/.bin/semver "$version" -r ">$latest" >/dev/null; then
+            echo "crawlio@$version is not greater than published latest ($latest)" >&2
+            exit 1
+          fi
+
       # Full proof chain on the tagged commit before anything ships.
       - run: bun run check
       - run: bun run build
