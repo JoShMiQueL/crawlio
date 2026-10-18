@@ -37,7 +37,7 @@ Non-goals:
 | --- | --- |
 | **Self-hosted, not SaaS** | Unlike hosted scraping APIs (Firecrawl, Decodo, …): no API keys owed to us, no per-request billing, nothing leaves your infrastructure. You own the rate limits and the data. |
 | **Typed extraction** | Field specs infer the result type — `page.title` is `string \| undefined` because the spec says so, not because you annotated it. |
-| **Dual-runtime** | Same API on Node >= 22.19 and Bun >= 1.4.3; Bun gets native upgrades — see [Node and Bun](#node-and-bun). |
+| **Dual-runtime** | Same API on Node >= 26.12 and Bun >= 1.4.3; Bun gets native upgrades — see [Node and Bun](#node-and-bun). |
 | **Polite by default** | robots.txt on, per-origin serialization, an identifiable `crawlio/<version>` User-Agent, exponential backoff with jitter. `robots: false` and `stealth: true` are explicit opt-outs. |
 | **Proxies first-class** | Per-origin rotation, ban-aware health tracking, pooled-client cleanup. |
 | **Read-only rendering** | JS rendering via Playwright/Puppeteer adapters you inject — never bundled. Scraper-only by design: no clicking, no form fills, no automation. |
@@ -53,12 +53,12 @@ bun add crawlio
 npm i crawlio
 ```
 
-Requires Node.js >= 22.19 or Bun >= 1.4.3 — see [Node and
+Requires Node.js >= 26.12 or Bun >= 1.4.3 — see [Node and
 Bun](#node-and-bun) for what each runtime gets.
 
 ## Node and Bun
 
-Same code, same API, same results on both. Node >= 22.19 is the baseline;
+Same code, same API, same results on both. Node >= 26.12 is the baseline;
 Bun >= 1.4.3 is the preferred runtime and gets native upgrades where Bun
 exposes better primitives:
 

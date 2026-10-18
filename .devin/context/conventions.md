@@ -6,7 +6,7 @@ Items marked **[decided]** are project policy for a scraping SDK. The stack belo
 **[decided]** as of scaffold time — re-check `package.json` before assuming it still holds.
 
 ## Stack
-- **[decided]** TypeScript `^5.9.3` (deliberately NOT TypeScript 7 — no JS compiler API yet), `tsc` only with **no bundler** (no tsdown/tsup/rollup/esbuild), ESM-only (`"type": "module"`, `module`/`moduleResolution: nodenext`), Node `>=22`.
+- **[decided]** TypeScript `^5.9.3` (deliberately NOT TypeScript 7 — no JS compiler API yet), `tsc` only with **no bundler** (no tsdown/tsup/rollup/esbuild), ESM-only (`"type": "module"`, `module`/`moduleResolution: nodenext`), Node `>=26.12`.
 - **[decided]** Package manager / toolchain: **bun** (`packageManager: bun@1.4.3`, `bun.lock` canonical). The LIBRARY stays dual-runtime — Node consumers are first-class; node lanes verify via `npm run`/`npx`.
 - **[decided]** Lint + format: `@biomejs/biome` `^2.5.15`. Biome does **not** typecheck — `tsc --noEmit` is the typecheck step.
 - **[decided]** Tests: `vitest` `^5.0.5`. Also dev-only tooling: `publint`, `@arethetypeswrong/cli`, `@types/node`.
