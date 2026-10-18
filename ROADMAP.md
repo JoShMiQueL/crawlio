@@ -46,14 +46,13 @@ Ordered by effort:
 | --- | --- | --- |
 | ~~`p-limit` / `p-retry`~~ | Done — `src/limit.ts`, `src/retry.ts` | easy |
 | ~~`robots-parser`~~ | Done — `src/robots-parser.ts`, RFC 9309/Google-spec parser | medium |
-| `undici` | Node lane only — Bun fetch has native `proxy:` | easy/med |
-| `cheerio` | Extraction seam with two backends — see caveat | hard |
+| ~~`undici`~~ | Done — lazy `createRequire` on the Node lane only; stays a dep (`dispatcher:` needs an undici `Dispatcher`, and undici@7 arrives transitively via cheerio regardless) | easy/med |
+| ~~`cheerio`~~ | Kept — linkedom/node-html-parser/DIY all evaluated: lighter *and* weaker (no real XML mode for sitemaps, sub-spec malformed-HTML recovery). One parser = lane parity by construction | — |
 
-**The cheerio caveat.** Bun's `HTMLRewriter` covers FieldSpec extraction
-(`{selector, attr, all}`) but is Bun-only, so extraction becomes a seam with
-two backends: HTMLRewriter on Bun, cheerio stays on the Node lane. Net:
-zero runtime deps on Bun, one internal dep on Node. Writing a from-scratch
-HTML parser is explicitly a non-goal.
+**Why two deps is the floor.** Removing cheerio means owning an HTML5-spec
+parser; removing undici means owning an HTTP client (a hand-rolled CONNECT
+tunnel cannot plug into `fetch`'s `dispatcher` slot). Both are correctness
+dependencies — owning them is the ruled-out path.
 
 ## Phase 3 — Publish
 
