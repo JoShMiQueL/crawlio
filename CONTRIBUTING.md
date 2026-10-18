@@ -56,6 +56,8 @@ consumers. If both lanes should behave identically, write the Node API
 5. Docs-only changes skip the heavy matrix via path filtering — expected,
   not a bug
 
+Releases are tag-driven and automated — see [RELEASING.md](RELEASING.md).
+
 ## What not to build
 
 - No browser actions (click/fill/type) — crawlio is a scraper; automation
