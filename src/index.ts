@@ -56,6 +56,8 @@ export {
 } from "./search.js";
 export type { CapSolverOptions } from "./solvers/capsolver.js";
 export { capSolver } from "./solvers/capsolver.js";
+export type { FlareSolverrOptions } from "./solvers/flaresolverr.js";
+export { flareSolverr } from "./solvers/flaresolverr.js";
 export type {
   CaptchaChallenge,
   CaptchaSolution,
