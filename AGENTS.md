@@ -70,7 +70,7 @@ under Bun instead).
 This project uses a Devin multi-agent system in `.devin/`:
 - You describe the task; the `orchestrate` skill auto-triggers (model-invoked) and delegates to `.devin/agents/` subagents.
 - Subagents: `contextscout` (context), `coder` (implement), `reviewer` (review, read-only), `qa` (verify, read-only), `researcher` (web).
-- Hard gates via `.devin/hooks.v1.json`: direct root-agent edits are blocked (delegate to `coder`), and turns can't end with unverified code changes (qa+reviewer required). Hooks also include `SessionStart`/`PostCompaction` (context re-injection) and `SubagentStop` (subagent output-contract validation).
+- Hard gates via `.devin/hooks.v1.json`: direct root-agent edits are blocked (delegate to `coder`), and turns can't end with unverified code changes (qa+reviewer required). Hooks also include `SessionStart`/`PostCompaction` (context re-injection) and `PostToolUse` on `run_subagent`/`read_subagent` (subagent output-contract validation).
 - `.devin/rules/` holds trigger-scoped rules: `scraping-safety` (model_decision), `testing` (glob-scoped), `context-system` (always_on).
 - Hard rules above apply to every subagent.
 

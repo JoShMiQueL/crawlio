@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/JoShMiQueL/crawlio/actions/workflows/ci.yml/badge.svg)](https://github.com/JoShMiQueL/crawlio/actions/workflows/ci.yml)
 
-[Why crawlio](#why-crawlio) · [Install](#install) · [Node and Bun](#node-and-bun) · [Usage](#usage) · [CLI](#cli) · [MCP server](#mcp-server) · [Stealth](#stealth-opt-in) · [Proxies](#proxies) · [Rendering](#rendering-javascript-pages-render) · [Custom providers](#custom-providers-and-renderers) · [Contributing](CONTRIBUTING.md)
+[Why crawlio](#why-crawlio) · [Install](#install) · [Node and Bun](#node-and-bun) · [Usage](#usage) · [CLI](#cli) · [MCP server](#mcp-server) · [Stealth](#stealth-opt-in) · [Proxies](#proxies) · [Rendering](#rendering-javascript-pages-render) · [Custom providers](#custom-providers-and-renderers) · [Security](#security) · [Contributing](CONTRIBUTING.md)
 
 A typed, self-hosted web-data extraction library: scrape, map, crawl, and
 search over HTTP with typed field specs, plus a pluggable renderer for
@@ -74,6 +74,9 @@ npm i crawlio
 Requires Node.js >= 26.12 or Bun >= 1.4.3 — see [Node and
 Bun](#node-and-bun) for what each runtime gets.
 
+crawlio is 0.x: minor releases may break the API — pin the version and
+skim the [changelog](CHANGELOG.md) before upgrading.
+
 ## Node and Bun
 
 Same code, same API, same results on both. Node >= 26.12 is the baseline;
@@ -129,6 +132,22 @@ const page = await scrape("https://example.com", {
   links: { selector: "article a", attr: "href", all: true },
 });
 // page.title: string | undefined — inferred from the field spec
+```
+
+### `scrapeAll` — one record per container
+
+For listing pages, `scrapeAll` applies the same typed spec inside each
+`container` match — selectors are scoped strictly to the container, so a
+sibling item's fields can't leak in:
+
+```ts
+import { scrapeAll } from "crawlio";
+
+const items = await scrapeAll("https://example.com/products", "article.product", {
+  name: "h2",
+  price: { selector: ".price", attr: "data-amount" },
+});
+// items: { name?: string; price?: string }[] — one per article.product
 ```
 
 ### `map` — discover a site's URLs
@@ -482,11 +501,11 @@ closed on shutdown.
 
 The same layer the `crawlio-mcp` binary wires onto stdio is importable as
 `crawlio/mcp` — `createCrawlioMcpServer`, `createCrawlioTools`,
-`createCrawlioMcpHttpHandler`, the
+`createCrawlioMcpHttpHandler`, `createCrawlioMcpFetchHandler`, the
 `resolveEnvRenderer`/`resolveMcpSearchProvider`/`parseJsonFields` helpers,
 and their types (`CrawlioMcpServer`, `CrawlioTools`, `CrawlioToolsDeps`,
-`CrawlioMcpHttpHandler`, `McpToolDefinition`, `McpToolResult`,
-`ClosableRenderer`):
+`CrawlioMcpHttpHandler`, `CrawlioMcpFetchHandler`, `McpToolDefinition`,
+`McpToolResult`, `ClosableRenderer`):
 
 ```ts
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -516,11 +535,20 @@ const handler = await createCrawlioMcpHttpHandler(tools);
 createServer((req, res) => void handler(req, res)).listen(3000, "127.0.0.1");
 ```
 
-For Fetch-style runtimes (Workers, Deno, Bun) the equivalent is
-`WebStandardStreamableHTTPServerTransport` from
-`@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js` — fresh
-transport (and `McpServer`, since a `Protocol` accepts one `connect()` at
-a time) per request, `Request`/`Response` in place of `req`/`res`.
+For Fetch-style runtimes (Workers, Deno, Bun) the same wiring ships as
+`createCrawlioMcpFetchHandler(tools, onError?)` — the
+`WebStandardStreamableHTTPServerTransport` sibling, `Request`/`Response`
+in place of `req`/`res`, same stateless per-request rule. This is what
+`crawlio-mcp --transport http` serves under Bun — no hand-wired
+transport:
+
+```ts
+import { createCrawlioMcpFetchHandler, createCrawlioTools } from "crawlio/mcp";
+
+const tools = createCrawlioTools();
+const fetch = await createCrawlioMcpFetchHandler(tools);
+Bun.serve({ port: 3000, hostname: "127.0.0.1", fetch });
+```
 
 Like `crawlio/playwright` without `playwright-core`, `import "crawlio/mcp"`
 works with the peers absent — the SDK and zod are only `import()`ed inside
@@ -816,6 +844,36 @@ Writing one — or loading an adapter module into the CLI
 (`--provider`/`--renderer` take module specifiers)? Contracts, worked
 examples, packaging, and testing live in
 [docs/custom-adapters.md](docs/custom-adapters.md).
+
+## Low-level API
+
+The pieces under the entry points are exported too, for callers that want
+one layer down:
+
+- **Error taxonomy** — every SDK-thrown failure is a `ScrapeError` with a
+  `code` (`ScrapeErrorCode`): `HttpError`, `RobotsError`, `FetchError`,
+  `TimeoutError`, `ParseError`, `ConfigError`.
+- **robots.txt helpers** — `fetchRobotsTxt`, `parseRobots`,
+  `robotsAllowed`, `robotsUrlFor`, `RobotsAgent`.
+- **`ProxyPool`** — the rotation/health pool behind `proxies`, usable
+  standalone (`ProxyPoolOptions`, `ProxyFetchFactory`).
+- **Charset** — `sniffCharset`, `charsetFromContentType`, `decodeBody`.
+- **Primitives and defaults** — `fetchHtmlOnce`, `parseHtml`,
+  `extract`/`extractAll`, `isLikelyDynamic`, `isBun`, `VERSION`,
+  `DEFAULT_USER_AGENT`, `DEFAULT_TIMEOUT`, `DEFAULT_RETRIES`.
+
+## Security
+
+crawlio fetches the URLs you give it — that is the feature, and the
+threat model. If URLs come from untrusted input (an MCP client, a web
+handler), SSRF gating is the caller's job: block internal ranges,
+link-local, and metadata endpoints upstream. robots.txt is honored by
+default (`robots: false` opts out), the default User-Agent is
+identifiable, target URLs are http(s) — `map`/`crawl` reject other
+schemes outright — and credentials embedded in proxy URLs are scrubbed
+from errors on a best-effort basis. See [SECURITY.md](SECURITY.md) for
+supported versions and how to report a vulnerability — privately, via
+GitHub Security Advisories, not public issues.
 
 ## License
 

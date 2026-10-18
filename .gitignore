@@ -6,6 +6,12 @@ coverage/
 *.tsbuildinfo
 .env
 .env.*
+!.env.example
+!.env.sample
 *.log
 playground/
 *.tgz
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

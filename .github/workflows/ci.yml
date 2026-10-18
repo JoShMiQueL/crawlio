@@ -38,6 +38,8 @@ jobs:
               - 'bun.lock'
               - 'tsconfig*.json'
               - 'biome.json'
+              - 'vitest.config.*'
+              - 'vitest.workspace.*'
               - '.github/workflows/**'
 
   # Meta lane — platform-independent checks (biome/tsc/publint/attw) run
