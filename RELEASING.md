@@ -1,38 +1,53 @@
 # Releasing
 
-Releases are tag-driven: pushing a `v*` tag runs
-`.github/workflows/release.yml`, which re-runs the full proof chain
-(lint, typecheck, tests, build, pack checks, browser e2e) on the tagged
-commit, then publishes to npm with provenance and creates the GitHub
-release.
+Releases are autonomous but human-gated. On every push to `main`,
+`.github/workflows/release-please.yml` runs
+[release-please](https://github.com/googleapis/release-please): it keeps
+a **Release PR** open that accumulates the changelog and the
+`package.json` version bump from conventional commits. The one human
+click is merging that PR — release-please then creates the `v*` tag and
+the GitHub release with categorized notes, and the same workflow
+re-runs the full proof chain (lint, typecheck, tests, build, pack
+checks, browser e2e) on the tagged commit before publishing to npm with
+provenance.
+
+Tags created by `GITHUB_TOKEN` don't fire `push: tags` workflows
+(GitHub's recursion guard), which is why verify + publish live inside
+`release-please.yml` itself.
 
 ## Cutting a release
 
-1. Open a PR bumping `version` in `package.json` (semver). Merge it.
-2. Tag the merge commit and push:
-
-   ```sh
-   git tag vX.Y.Z
-   git push origin vX.Y.Z
-   ```
-
-3. The workflow verifies the tag equals `v` + `package.json` version,
-   then publishes `crawlio` to npm and creates the GitHub release with
-   generated notes. The bump itself is manual — the workflow only
-   enforces that the version is unpublished and above npm's `latest`.
+1. Merge work PRs using conventional commits. The bot keeps the
+   Release PR updated — review its changelog and proposed version.
+2. Merge the Release PR. Tag, GitHub release, verify, and npm publish
+   are all automatic.
 
 No npm token is stored in the repo — publishing uses npm trusted
 publishing (OIDC) only.
 
-## Rehearsing a release
+## Manual escape hatch
 
-The workflow also triggers manually (**Actions → release → Run
+Pushing a `v*` tag still runs `.github/workflows/release.yml` (same
+verify chain, then publish + GitHub release), for when the bot path
+isn't usable:
+
+```sh
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+`release.yml` also triggers manually (**Actions → release → Run
 workflow**). A `workflow_dispatch` run executes the same `verify` chain
 but publishes with `npm publish --dry-run` and skips `gh release
 create` — the full release path is exercised end-to-end without
 shipping, useful before v0.1.0 exists or before cutting any new tag.
 
 ## Choosing the version bump
+
+The table describes what release-please computes from conventional
+commits since the last release. `bump-minor-pre-major` is set in
+`release-please-config.json`, so a breaking change on 0.x bumps minor,
+not major.
 
 | Change since the last release | Bump |
 | --- | --- |
@@ -54,12 +69,14 @@ npm publish --provenance --access public
 
 Then connect the repo on npmjs.com: package **Settings → Trusted
 Publisher → GitHub Actions**, with owner `JoShMiQueL`, repository
-`crawlio`, workflow `release.yml`, and no environment. Every release
-after that publishes through the workflow.
+`crawlio`, and no environment. npm binds each publisher to a workflow
+filename, so configure **two** publishers (npm allows up to 10):
+`release-please.yml` for the bot path and `release.yml` for the manual
+tag path.
 
 ## Hardening
 
-After the trusted publisher is in place, set package **Settings →
+After the trusted publishers are in place, set package **Settings →
 Publishing access** to "Require two-factor authentication and disallow
 tokens" — this blocks classic `NPM_TOKEN` publishes entirely, leaving
 OIDC as the only path.
