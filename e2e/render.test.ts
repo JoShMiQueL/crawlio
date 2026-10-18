@@ -1,11 +1,12 @@
 /**
  * Real-browser consumer e2e for the render seam: playwright-core driving
- * a real chromium against a loopback node:http server. Unlike the unit
- * suites this does NOT import `src/` — `bun run e2e` (scripts/e2e.ts)
- * packs the tarball and copies this file into a throwaway project that
- * installs it, so the imports below resolve exactly like a real
- * consumer's: `crawlio` (dist/index.js) and the `crawlio/playwright`
- * subpath export.
+ * a real chromium, and puppeteer-core driving the `puppeteer browsers
+ * install chrome` download, against a loopback node:http server. Unlike
+ * the unit suites this does NOT import `src/` — `bun run e2e`
+ * (scripts/e2e.ts) packs the tarball and copies this file into a
+ * throwaway project that installs it, so the imports below resolve
+ * exactly like a real consumer's: `crawlio` (dist/index.js) and the
+ * `crawlio/playwright` / `crawlio/puppeteer` subpath exports.
  *
  * This file only ever runs under `bun test` — orchestrated by
  * `bun run e2e` locally and by the `e2e-browsers` CI job, which set
@@ -16,6 +17,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createScraper, type Renderer, scrape } from "crawlio";
 import { type PlaywrightRenderer, playwrightRenderer } from "crawlio/playwright";
+import { type PuppeteerRenderer, puppeteerRenderer } from "crawlio/puppeteer";
 
 const E2E = process.env.CRAWLIO_E2E === "1";
 const e2e = E2E ? it : it.skip;
@@ -63,7 +65,7 @@ function startServer(): Promise<{ server: Server; base: string }> {
   });
 }
 
-describe("e2e — real chromium render seam", () => {
+describe("e2e — real chromium render seam (playwright)", () => {
   let server: Server | undefined;
   let base = "";
   let renderer: PlaywrightRenderer | undefined;
@@ -160,6 +162,84 @@ describe("e2e — real chromium render seam", () => {
       await own.close(); // a second close is a documented no-op
       // A leaked browser would keep this process alive — the suite (and CI
       // job) exiting at all is the assertion that nothing hangs.
+    },
+    E2E_TIMEOUT,
+  );
+});
+
+describe("e2e — real chrome render seam (puppeteer)", () => {
+  let server: Server | undefined;
+  let base = "";
+  let renderer: PuppeteerRenderer | undefined;
+
+  /** Narrowed handles for a live test — beforeAll filled them under E2E. */
+  function live(): { renderer: PuppeteerRenderer; base: string } {
+    if (renderer === undefined) throw new Error("e2e renderer not initialized");
+    return { renderer, base };
+  }
+
+  beforeAll(async () => {
+    if (!E2E) return;
+    ({ server, base } = await startServer());
+    // `channel: "chrome"` resolves the same download `crawlio install
+    // --engine puppeteer` fetches (`puppeteer browsers install chrome`) —
+    // the adapter takes no channel default of its own; the CLI's
+    // "chrome" default lives in src/cli.ts.
+    renderer = puppeteerRenderer({ channel: "chrome" });
+  });
+
+  afterAll(async () => {
+    await renderer?.close(); // browser first — releases its keep-alive sockets
+    const http = server;
+    if (http !== undefined) {
+      await new Promise<void>((resolve) => http.close(() => resolve()));
+    }
+  });
+
+  e2e(
+    "render() returns the post-JS DOM of a shell page",
+    async () => {
+      const { renderer: engine, base: origin } = live();
+      const page = await engine.render(`${origin}/shell`);
+      expect(page.status).toBe(200);
+      expect(page.url).toBe(`${origin}/shell`);
+      expect(page.html).toContain("<h1>Rendered title</h1>");
+      expect(page.html).toContain('<span class="price">42.5</span>');
+    },
+    E2E_TIMEOUT,
+  );
+
+  e2e(
+    "scrape(renderMode 'always') extracts the JS-injected fields, typed",
+    async () => {
+      const { renderer: engine, base: origin } = live();
+      const data = await scrape(
+        `${origin}/shell`,
+        {
+          title: "#app h1",
+          price: { selector: ".price", transform: Number.parseFloat },
+          about: { selector: "#app a", attr: "href" },
+        },
+        { render: engine, renderMode: "always" },
+      );
+      expect(data.title).toBe("Rendered title");
+      expect(data.price).toBe(42.5); // transform ran — a number, not a string
+      expect(data.about).toBe(`${origin}/about`); // resolved against the final URL
+    },
+    E2E_TIMEOUT,
+  );
+
+  e2e(
+    "close() tears the browser down and is idempotent",
+    async () => {
+      const { base: origin } = live();
+      // A dedicated renderer — closing the shared one mid-suite would
+      // strand the tests that still need it.
+      const own = puppeteerRenderer({ channel: "chrome" });
+      const page = await own.render(`${origin}/shell`);
+      expect(page.html).toContain("Rendered title");
+      await own.close();
+      await own.close(); // a second close is a documented no-op
     },
     E2E_TIMEOUT,
   );
