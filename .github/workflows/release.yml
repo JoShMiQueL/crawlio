@@ -1,0 +1,73 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-26.04
+    steps:
+      # Tag push checks out the tagged commit; GITHUB_REF_NAME is the tag.
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.3"
+
+      - run: bun install --frozen-lockfile
+
+      # Guard: the tag must equal `v` + package.json version — prevents
+      # publishing v0.2.0 while package.json still says 0.1.0.
+      - name: tag matches package.json version
+        run: |
+          expected="v$(node -p "require('./package.json').version")"
+          if [ "$expected" != "$GITHUB_REF_NAME" ]; then
+            echo "tag '$GITHUB_REF_NAME' does not match package.json version ('$expected')" >&2
+            exit 1
+          fi
+
+      # Full proof chain on the tagged commit before anything ships.
+      - run: bun run check
+      - run: bun run build
+      - run: bun run check:pack
+      # --with-deps apt-installs chromium's system libraries in the
+      # throwaway consumer project — same as the ci e2e lane.
+      - run: bun scripts/e2e.ts --with-deps
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-26.04
+    permissions:
+      id-token: write # OIDC for npm provenance / trusted publishing
+      contents: write # gh release create
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+
+      # `npm publish` runs the `prepack` script (`bun run check && bun run
+      # build`), so this job needs the bun toolchain + devDeps too —
+      # otherwise dist/ is missing and the tarball ships empty.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.3"
+      - run: bun install --frozen-lockfile
+
+      # Trusted publishing needs npm >= 11.5.1; runner-bundled versions
+      # drift, so upgrade before publishing.
+      - run: npm i -g npm@latest
+      - run: npm publish --provenance --access public
+
+      - run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+        env:
+          GH_TOKEN: ${{ github.token }}
