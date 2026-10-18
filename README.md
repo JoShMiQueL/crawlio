@@ -14,7 +14,7 @@ Pre-1.0 — the API may still change.
 | scrape — fetch + typed extraction over HTTP | done |
 | Politeness controls — robots.txt, per-origin serialization, delays, concurrency cap | done |
 | Stealth (opt-in) — browser header profiles, cookie jar, referer chain, jitter | done |
-| CAPTCHA solver seam — user-provided `solve` interface | done |
+| CAPTCHA solver seam — `solve` interface + built-in `capSolver` | done |
 | `map` — discover all URLs on a site | done |
 | `crawl` — recursive same-site traversal | done |
 | Proxies — pool routing with rotation and ban-aware health checks | done |
@@ -556,11 +556,28 @@ What it covers, all HTTP-layer:
   fetched page (first request looks like a typed-URL visit).
 - **Jittered pacing** — `requestDelay` also accepts `{ min, max }`, sampled
   uniformly per request.
-- **CAPTCHA solver hook** — `solver` is a user-provided
-  `{ solve(challenge) => Promise<CaptchaSolution> }` interface, not a built-in
-  service. When a challenge page is detected (Cloudflare interstitial,
-  Turnstile, reCAPTCHA, hCaptcha markers), the solver runs once and the request
-  is retried once with the returned cookies + bound User-Agent.
+- **CAPTCHA solver hook** — `solver` is a
+  `{ solve(challenge) => Promise<CaptchaSolution> }` seam. When a challenge
+  page is detected (Cloudflare interstitial, Turnstile, reCAPTCHA, hCaptcha
+  markers), the solver runs once and the request is retried once with the
+  returned cookies + bound User-Agent. `capSolver` is the built-in for
+  Cloudflare interstitials via the paid CapSolver API
+  (`CAPSOLVER_API_KEY` env):
+
+  ```ts
+  const scraper = createScraper({
+    solver: capSolver(),
+    proxies: [process.env.PROXY_URL as string],
+  });
+  ```
+
+  Its honest constraints: a proxy is required — `cf_clearance` is bound to
+  the exit IP, so the provider solves through the `proxy`/`proxies` the
+  request used (or `capSolver({ proxy })` as fallback) and the returned
+  User-Agent must be reused verbatim (the retry does this). Widget types are
+  out of scope — their tokens are form-post answers a plain retry cannot
+  apply. And the TLS fingerprint still applies — Bun's BoringSSL is the
+  closer-to-Chrome lane.
 
 Honest ceiling — stealth here is headers, cookies, and timing. It does NOT:
 
@@ -569,10 +586,10 @@ Honest ceiling — stealth here is headers, cookies, and timing. It does NOT:
 - execute JavaScript — challenges that need a real browser still need one;
 - fix IP reputation — that's what proxies are for (see below).
 
-Solver services are external and usually paid; API keys live inside your own
-`solve` implementation, never in SDK config. A solved challenge is not a
-guarantee of access. Using stealth is your responsibility — respect the target
-site's terms and applicable law.
+Solver services are external and usually paid; API keys live inside the
+solver (`capSolver` reads `CAPSOLVER_API_KEY`), never in SDK config. A solved
+challenge is not a guarantee of access. Using stealth is your responsibility —
+respect the target site's terms and applicable law.
 
 ## Proxies
 
@@ -762,7 +779,7 @@ injected, never bundled:
 | --- | --- | --- | --- |
 | Renderer | `{ render(url, options?) → RenderedPage }` (+ optional `close()`) | `createScraper({ render })` | `playwrightRenderer`, `puppeteerRenderer` |
 | Search provider | `{ search(query, options?) → SearchResult[] }` | `search(q, { provider })` | `braveSearchProvider`, `serperSearchProvider`, `tavilySearchProvider` |
-| CAPTCHA solver | `{ solve(challenge) → CaptchaSolution }` | `createScraper({ solver })` | none — always yours |
+| CAPTCHA solver | `{ solve(challenge) → CaptchaSolution }` | `createScraper({ solver })` | `capSolver` (Cloudflare interstitials) |
 | Fetch | `typeof globalThis.fetch` | `createScraper({ fetch })`, per call, provider adapters | undici default |
 
 A custom adapter is just a plain object satisfying the interface — no

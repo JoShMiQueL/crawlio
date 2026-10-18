@@ -54,6 +54,8 @@ export {
   serperSearchProvider,
   tavilySearchProvider,
 } from "./search.js";
+export type { CapSolverOptions } from "./solvers/capsolver.js";
+export { capSolver } from "./solvers/capsolver.js";
 export type {
   CaptchaChallenge,
   CaptchaSolution,

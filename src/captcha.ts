@@ -65,18 +65,32 @@ export function detectChallenge(input: {
   headers: Headers;
   /** Decoded response body. */
   html: string;
+  /** The egress proxy the failed request used, when it went through a pool. */
+  proxyUrl?: string;
+  /** The User-Agent the failed request carried. */
+  userAgent?: string;
 }): CaptchaChallenge | null {
-  const { url, status, headers, html } = input;
+  const { url, status, headers, html, proxyUrl, userAgent } = input;
+  const context = {
+    ...(proxyUrl === undefined ? {} : { proxyUrl }),
+    ...(userAgent === undefined ? {} : { userAgent }),
+  };
 
   const cfMitigated = headers.get("cf-mitigated") === "challenge";
   const cfMarkers = CF_INTERSTITIAL_MARKERS.some((marker) => html.includes(marker));
   if (INTERSTITIAL_STATUSES.has(status) && (cfMitigated || cfMarkers)) {
-    return { url, type: "cloudflare-interstitial", sitekey: extractSitekey(html), html };
+    return {
+      url,
+      type: "cloudflare-interstitial",
+      sitekey: extractSitekey(html),
+      html,
+      ...context,
+    };
   }
 
   for (const { type, markers } of WIDGET_MARKERS) {
     if (markers.some((marker) => html.includes(marker))) {
-      return { url, type, sitekey: extractSitekey(html), html };
+      return { url, type, sitekey: extractSitekey(html), html, ...context };
     }
   }
   return null;

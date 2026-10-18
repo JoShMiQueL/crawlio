@@ -581,6 +581,12 @@ export function createScraper(options: ScraperOptions = {}): Scraper {
             status: result.status,
             headers: result.headers,
             html: result.html,
+            // The egress that served the failed request and the UA it carried
+            // — clearance-type solutions are bound to both, so the solver
+            // needs them to reproduce the same story. `servedProxyFor` is the
+            // pool's per-request attribution (undefined without a pool).
+            proxyUrl: proxyPool?.servedProxyFor(origin),
+            userAgent,
           })
         : null;
       if (
