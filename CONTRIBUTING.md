@@ -17,7 +17,8 @@ first-class.
 | Command | Purpose |
 | --- | --- |
 | `bun run check` | lint + typecheck + tests — run before every PR |
-| `bun test` | the suite under `bun:test` (Bun lane) |
+| `bun test test/` | the suite under `bun:test` (Bun lane) |
+| `bun run e2e` | real-browser consumer e2e against the packed tarball |
 | `npm run test` | the suite under vitest/Node (Node lane) |
 | `bun run build` | `tsc` → `dist/` |
 | `bun run build:bin` | `bun build --compile` → `dist-bin/*.exe` |
