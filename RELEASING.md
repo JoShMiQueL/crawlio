@@ -18,7 +18,8 @@ release.
 
 3. The workflow verifies the tag equals `v` + `package.json` version,
    then publishes `crawlio` to npm and creates the GitHub release with
-   generated notes.
+   generated notes. The bump itself is manual — the workflow only
+   enforces that the version is unpublished and above npm's `latest`.
 
 No npm token is stored in the repo — publishing uses npm trusted
 publishing (OIDC) only.
