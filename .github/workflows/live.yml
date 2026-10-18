@@ -1,0 +1,48 @@
+# Live-network suite — REAL requests against real public sites
+# (test/live.test.ts, gated on CRAWLIO_LIVE). Deliberately OFF the PR
+# gate: scheduled nightly + manual dispatch only, never on push/PR, and
+# not part of ci-success. External sites flaking must not block merges.
+name: live
+
+on:
+  schedule:
+    - cron: "6 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CRAWLIO_LIVE: "1"
+
+jobs:
+  live:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [node, bun]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same dual-runtime policy as ci.yml: node proves the library works
+      # when nothing runs under Bun, bun runs the bun:test lane.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: matrix.runtime == 'node'
+        with:
+          node-version: "26"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.3"
+
+      - run: bun install --frozen-lockfile
+      - run: npx vitest run test/live.test.ts
+        if: matrix.runtime == 'node'
+      - run: bun test test/live.test.ts
+        if: matrix.runtime == 'bun'

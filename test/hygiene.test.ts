@@ -49,12 +49,16 @@ describe("test source hygiene", () => {
     // src/private-hosts.js is the internal
     // private-IP classifier unit-tested at its own seam (like robots-parser),
     // src/robots.js holds the fetchRobotsTxtResult kind-triplet and the
-    // ROBOTS_MAX_BODY_BYTES cap the body-limit suite asserts on, and
+    // ROBOTS_MAX_BODY_BYTES cap the body-limit suite asserts on,
+    // src/captcha.js holds detectChallenge — the internal marker-matching
+    // seam the scraper calls when a solver is configured; the live suite
+    // asserts it fires (or doesn't) on a real anti-bot response, and
     // src/render/*.js are the
     // `crawlio/playwright` and `crawlio/puppeteer` subpath exports — they
     // cannot come through index.js because their peer deps must stay
     // optional.
     const allowed = new Set([
+      "../src/captcha.js",
       "../src/cli-args.js",
       "../src/errors.js",
       "../src/mcp-server.js",

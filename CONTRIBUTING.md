@@ -19,6 +19,7 @@ first-class.
 | `bun run check` | lint + typecheck + tests — run before every PR |
 | `bun test test/` | the suite under `bun:test` (Bun lane) |
 | `bun run e2e` | real-browser consumer e2e against the packed tarball |
+| `CRAWLIO_LIVE=1 bun test test/live.test.ts` | live-network suite against real public sites (env-gated) |
 | `npm run test` | the suite under vitest/Node (Node lane) |
 | `bun run build` | `tsc` → `dist/` |
 | `bun run build:bin` | `bun build --compile` → `dist-bin/*.exe` |
@@ -38,6 +39,10 @@ consumers. If both lanes should behave identically, write the Node API
 - **Tests** are written against the vitest API surface (which `bun:test`
   covers) so the same suite runs on both lanes. Bun-only behavior gets
   `isBun ? it : it.skip`-style gates.
+- **Live tests** (`test/live.test.ts`) hit real public sites, are gated on
+  `CRAWLIO_LIVE`, and run nightly in CI (`.github/workflows/live.yml`) off
+  the PR gate. Assertions are structural — counts, shapes, URL
+  resolvability — never exact page content, which changes.
 - **Comments**: terse, factual, explain *why* when non-obvious. No
   narration of what the code visibly does.
 - **Dependencies**: near-zero by policy — runtime deps are `cheerio` +
