@@ -56,7 +56,11 @@ dependencies — owning them is the ruled-out path.
 
 ## Phase 3 — Publish
 
-- Tag → `npm publish --provenance` + release workflow.
+- Primary path: merge the release-please Release PR → tag + GitHub
+  release + verify chain + `npm publish --provenance` via
+  `release-please.yml` (OIDC trusted publishing — see RELEASING.md). A
+  manual `v*` tag push is the escape hatch (`release.yml`); the
+  first-ever publish is by hand.
 - Gate: phases 1–2 merged, CI green.
 
 ## Non-goals

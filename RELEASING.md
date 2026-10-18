@@ -42,6 +42,12 @@ but publishes with `npm publish --dry-run` and skips `gh release
 create` — the full release path is exercised end-to-end without
 shipping, useful before v0.1.0 exists or before cutting any new tag.
 
+One narrowing to know: once a version is actually published, a
+`workflow_dispatch` rehearsal on `main` fails the "version is unpublished
+and newer" guard — `main`'s `package.json` still says the shipped
+version. Rehearsals work again once a version bump lands on a branch;
+that is expected, not a broken pipeline.
+
 ## Choosing the version bump
 
 The table describes what release-please computes from conventional
@@ -64,8 +70,13 @@ exist yet, so v0.1.0 ships by hand:
 
 ```sh
 npm login
-npm publish --provenance --access public
+npm publish --access public
 ```
+
+No `--provenance` on this one — it only works inside a supported CI
+provider ("not supported for provider: null" locally), and a trusted
+publisher cannot exist for a package that has never shipped. Provenance
+attestation comes from the CI publish path afterwards.
 
 Then connect the repo on npmjs.com: package **Settings → Trusted
 Publisher → GitHub Actions**, with owner `JoShMiQueL`, repository
