@@ -13,8 +13,9 @@ A library, not a hosted service. Non-goals, in order of importance:
 - **crawlio NEVER performs browser actions.** No click/fill/type/navigation flows —
   rendering is read-only. Browser automation is a separate sibling project.
 - **No own search index** — `search` delegates to external providers.
-- **No managed-challenge guarantees at the HTTP layer** — the captcha solver is a
-  seam, not a promise.
+- **No managed-challenge guarantees at the HTTP layer** — a built-in solver
+  (`capSolver`, Cloudflare interstitials via the paid CapSolver API) exists,
+  but the solver is still a seam, not a promise: guarantees are unchanged.
 - **Nothing hosted** — no API keys, no cloud component.
 
 ## Stack

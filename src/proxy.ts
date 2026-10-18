@@ -379,6 +379,18 @@ export class ProxyPool {
   }
 
   /**
+   * The proxy URL that served the most recent wire request for `origin` —
+   * attribution for challenge solving: clearance-type solutions are bound to
+   * the egress IP, so a solver must know which proxy the failed request used.
+   * `undefined` before the pool serves `origin`. Same attribution caveat as
+   * {@link reportBan}: under concurrent same-origin requests this is the
+   * MOST RECENT serve — best-effort for `per-request`.
+   */
+  servedProxyFor(origin: string): string | undefined {
+    return this.currentByOrigin.get(origin)?.proxyUrl;
+  }
+
+  /**
    * Close every pooled client the pool created (one undici `ProxyAgent` or
    * `Bun.FetchSession` per proxy URL served so far).
    * With a custom

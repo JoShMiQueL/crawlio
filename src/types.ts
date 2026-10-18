@@ -205,6 +205,19 @@ export interface CaptchaChallenge {
    * `action`/`cData`/`pageData`, etc.) read them from this.
    */
   html: string;
+  /**
+   * The egress proxy the failed request used (`http://[user:pass@]host:port`),
+   * when it went through a `proxy`/`proxies` pool — clearance-type solutions
+   * are IP-bound, so a solver must ride this same egress or the solved
+   * cookie is worthless. Absent when the request went out direct.
+   */
+  proxyUrl?: string;
+  /**
+   * The User-Agent the failed request carried — clearance solutions are also
+   * bound to a UA, so solvers should keep this same one when the provider
+   * asks which UA to solve with.
+   */
+  userAgent?: string;
 }
 
 /**
@@ -252,18 +265,24 @@ export interface CaptchaSolution {
  *   on ban signals (transport failure, HTTP 407/403/429, a detected challenge
  *   page, or a timeout). A proxy that fails 3 times in a row is quarantined
  *   for ~5 minutes and skipped until the cooldown expires.
+ *   **Solver caveat:** a detected challenge page rebinds the origin BEFORE a
+ *   configured solver runs, so a solved `cf_clearance` is applied from a
+ *   different IP than the one that solved it — the clearance won't stick.
+ *   Pair solvers with `per-origin` (or a single proxy), not `on-ban`.
  */
 export type ProxyRotation = "per-origin" | "per-request" | "on-ban";
 
 /**
  * Pluggable CAPTCHA solver.
  *
- * The SDK ships NO built-in solver: solving is delegated to user-provided
- * integrations (2Captcha, CapSolver, CapMonster, self-hosted, ...). API keys
- * and provider config live inside the user's implementation — never in SDK
- * config. Honest caveats: solver services are external and usually paid, and a
- * solved challenge does not guarantee access — IP reputation, TLS
- * fingerprinting, and rate limits still apply.
+ * Solving is delegated to provider integrations: the SDK ships one built-in
+ * (`capSolver`, CapSolver's `AntiCloudflareTask` for `cloudflare-interstitial`
+ * challenges) and anything implementing this interface works — 2Captcha,
+ * CapMonster, self-hosted, a fixture stub. API keys and provider config live
+ * inside the solver — never in SDK config. Honest caveats, unchanged by the
+ * built-in: solver services are external and usually paid, and a solved
+ * challenge does not guarantee access — IP reputation, TLS fingerprinting,
+ * and rate limits still apply.
  */
 export interface CaptchaSolver {
   /**
