@@ -1,14 +1,21 @@
 /**
- * Real-browser e2e for the render seam: playwright-core driving a real
- * chromium against a loopback node:http server. Gated on CRAWLIO_E2E=1 —
- * the `e2e-browsers` CI job installs chromium and sets it; everywhere else
- * the suite self-skips so `bun test`/`vitest` stay engine-free.
+ * Real-browser consumer e2e for the render seam: playwright-core driving
+ * a real chromium against a loopback node:http server. Unlike the unit
+ * suites this does NOT import `src/` — `bun run e2e` (scripts/e2e.ts)
+ * packs the tarball and copies this file into a throwaway project that
+ * installs it, so the imports below resolve exactly like a real
+ * consumer's: `crawlio` (dist/index.js) and the `crawlio/playwright`
+ * subpath export.
+ *
+ * This file only ever runs under `bun test` — orchestrated by
+ * `bun run e2e` locally and by the `e2e-browsers` CI job, which set
+ * CRAWLIO_E2E=1; a bare `bun test` elsewhere self-skips.
  */
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createScraper, type Renderer, scrape } from "../src/index.js";
-import { type PlaywrightRenderer, playwrightRenderer } from "../src/render/playwright.js";
+import { createScraper, type Renderer, scrape } from "crawlio";
+import { type PlaywrightRenderer, playwrightRenderer } from "crawlio/playwright";
 
 const E2E = process.env.CRAWLIO_E2E === "1";
 const e2e = E2E ? it : it.skip;
