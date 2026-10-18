@@ -28,7 +28,7 @@
   "type": "module",
   "packageManager": "bun@1.4.3",
   "engines": {
-    "node": ">=22.19"
+    "node": ">=26.12.0"
   },
   "files": [
     "dist"

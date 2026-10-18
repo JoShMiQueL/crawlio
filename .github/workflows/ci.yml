@@ -46,7 +46,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-26.04]
-        node: [22, 24, 26]
+        node: [26]
         include:
           - os: windows-2025
             node: 24
