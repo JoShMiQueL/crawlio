@@ -19,6 +19,7 @@ import type { AnySchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ConfigError } from "./errors.js";
 import { type CrawlioTools, type CrawlioToolsDeps, createCrawlioTools } from "./mcp-tools.js";
+import { SEARCH_PROVIDER_NAMES } from "./search.js";
 import { VERSION } from "./version.js";
 
 // The `crawlio/mcp` subpath is this module — re-export the tool layer so
@@ -102,7 +103,10 @@ function toolInputSchemas(z: Zod): Record<string, AnySchema> {
     search: z
       .object({
         query: z.string().describe("The search query."),
-        provider: z.string().optional().describe("Built-in name or adapter module specifier."),
+        // Enum-only on the MCP surface — a client's `provider` argument is
+        // remote input, so the module-specifier loader (CLI-only) is not
+        // offered here; see resolveMcpSearchProvider.
+        provider: z.enum(SEARCH_PROVIDER_NAMES).optional().describe("A built-in provider name."),
         limit: count("Maximum results returned."),
       })
       .strict(),

@@ -48,6 +48,97 @@ export function scrubUrl(url: string): string {
   }
 }
 
+/**
+ * Strip credentials embedded in an error's `message` — for transport-layer
+ * failures whose cause may carry a credentialed URL (an undici/Bun proxy
+ * error can embed the proxy URL it failed to connect through).
+ *
+ * For each `secretUrls` entry the RAW string is replaced by its
+ * {@link scrubUrl} form. Because transports embed the credential in
+ * different spellings, three more representations are masked: the URL's
+ * NORMALIZED serialization (which rewrites the raw string), the
+ * percent-ENCODED `user:pass` pair, and the RAW userinfo substring —
+ * a password containing `@`, `:`, `%`, or a space appears verbatim
+ * in the message even though it parses to a different encoded form.
+ *
+ * A cause that scrubbed to a different message is wrapped in a fresh
+ * `Error` preserving `name`, every other own property (`code`,
+ * custom fields), `cause` (recursively scrubbed), and `stack` — so
+ * `err.code === "ECONNREFUSED"` callers keep working. Everything else
+ * (non-Error causes, nothing found) passes through untouched.
+ *
+ * Internal (not part of the public API) — shared by the fetch and proxy
+ * layers.
+ *
+ * @param cause The raw thrown error.
+ * @param secretUrls URLs whose credentials must not survive in the message.
+ * @returns `cause`, or a message-scrubbed clone of it.
+ */
+export function scrubErrorCredentials(
+  cause: unknown,
+  secretUrls: readonly string[],
+  seen: WeakSet<object> = new WeakSet(),
+): unknown {
+  // Error shapes are untrusted — a cyclic `cause` chain must not recurse
+  // forever. Returning the RAW node on a revisit would also leak it: the
+  // parent's `scrubbedCause === cause.cause` check would read "unchanged"
+  // and adopt the unscrubbed object as `clean.cause`. A marker both
+  // terminates the recursion and keeps the raw node out of the clone.
+  if (typeof cause === "object" && cause !== null) {
+    if (seen.has(cause)) return new Error("[circular cause]");
+    seen.add(cause);
+  }
+  if (!(cause instanceof Error) || secretUrls.length === 0) return cause;
+  let message = cause.message;
+  for (const raw of secretUrls) {
+    const scrubbed = scrubUrl(raw);
+    if (scrubbed !== raw) message = message.split(raw).join(scrubbed);
+    try {
+      const parsed = new URL(raw);
+      // The normalized serialization differs from the raw config string
+      // whenever the URL carries anything the WHATWG parser rewrites.
+      const normalized = parsed.toString();
+      const scrubbedNormalized = scrubUrl(normalized);
+      if (scrubbedNormalized !== normalized) {
+        message = message.split(normalized).join(scrubbedNormalized);
+      }
+      if (parsed.username !== "" || parsed.password !== "") {
+        // Encoded pair AND raw userinfo: a raw password with `@`/`:`/`%`/
+        // spaces shows up verbatim even though `parsed.password` encodes it.
+        // `[^/?#]*` in the userinfo patterns is greedy, so the match
+        // runs through the LAST `@` before the path — same as scrubUrl's
+        // textual fallback.
+        message = message.split(`${parsed.username}:${parsed.password}`).join("***:***");
+        const rawUserinfo =
+          /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)@/i.exec(raw)?.[1] ?? /^\/\/([^/?#]*)@/.exec(raw)?.[1];
+        if (rawUserinfo !== undefined) {
+          message = message.split(`${rawUserinfo}@`).join("***@");
+        }
+      }
+    } catch {
+      // Not a parseable URL — the raw-string replacement above is all there is.
+    }
+  }
+  const scrubbedCause = scrubErrorCredentials(cause.cause, secretUrls, seen);
+  if (message === cause.message && scrubbedCause === cause.cause) return cause;
+  const clean = new Error(message);
+  clean.name = cause.name;
+  // Clone every own property except the ones reset here — undici errors
+  // carry `.code` (ECONNREFUSED, …) and custom fields callers match on; a
+  // bare-Error clone silently dropped them.
+  for (const key of Object.getOwnPropertyNames(cause)) {
+    if (key === "name" || key === "message" || key === "stack" || key === "cause") continue;
+    const desc = Object.getOwnPropertyDescriptor(cause, key);
+    if (desc !== undefined) Object.defineProperty(clean, key, desc);
+  }
+  if (cause.cause !== undefined) clean.cause = scrubbedCause;
+  // The first stack line embeds the message — scrub it there too.
+  if (typeof cause.stack === "string") {
+    clean.stack = cause.stack.split(cause.message).join(message);
+  }
+  return clean;
+}
+
 /** Options accepted by {@link ScrapeError} and its subclasses. */
 export interface ScrapeErrorOptions {
   /**
@@ -61,6 +152,12 @@ export interface ScrapeErrorOptions {
   status?: number;
   /** HTTP status text, when the response carried one. */
   statusText?: string;
+  /**
+   * Set `false` for deterministic failures the retry layer must NOT retry —
+   * e.g. a redirect to a non-http(s) scheme or an exhausted redirect budget:
+   * the outcome cannot change on a second attempt.
+   */
+  retryable?: boolean;
 }
 
 /** Base class for every error thrown by crawlio. */
@@ -69,6 +166,8 @@ export class ScrapeError extends Error {
   readonly code: ScrapeErrorCode;
   /** The URL being worked on, when one is known, scrubbed of credentials. */
   readonly url?: string;
+  /** `false` marks a deterministic failure the retry layer must not retry. */
+  readonly retryable?: boolean;
 
   constructor(code: ScrapeErrorCode, message: string, options?: ScrapeErrorOptions) {
     // `cause` is declared by Error itself (lib.es2022.error) and must be handed to
@@ -77,6 +176,7 @@ export class ScrapeError extends Error {
     this.name = new.target.name;
     this.code = code;
     if (options?.url !== undefined) this.url = scrubUrl(options.url);
+    if (options?.retryable !== undefined) this.retryable = options.retryable;
   }
 }
 

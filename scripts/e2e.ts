@@ -16,7 +16,9 @@
  * `crawlio/puppeteer` imports then resolve through the exports map
  * exactly like a real consumer's → the packed bin scrapes a loopback
  * node:http page under node — the bin's real shebang runtime — proving
- * args → fetch → extract end-to-end on the node lane.
+ * args → fetch → extract end-to-end on the node lane, plus the packed
+ * failure paths (unknown subcommand, HTTP 404) and `map` against a
+ * sitemap fixture.
  *
  * The consumer uses npm — not bun — on purpose: `npm install` writes a
  * package-lock.json, so `crawlio install`'s lockfile sniff picks npm
@@ -98,6 +100,25 @@ try {
       res.writeHead(200, { "content-type": "text/plain" }).end("User-agent: *\nAllow: /\n");
       return;
     }
+    if (path === "/sitemap.xml") {
+      // `crawlio map` discovers this through its default probe list; locs are
+      // same-origin so the Host header supplies the absolute URLs.
+      const origin = `http://${req.headers.host}`;
+      res
+        .writeHead(200, { "content-type": "application/xml" })
+        .end(
+          `<?xml version="1.0" encoding="UTF-8"?>` +
+            `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">` +
+            `<url><loc>${origin}/nested/a</loc></url>` +
+            `<url><loc>${origin}/media</loc></url>` +
+            `</urlset>`,
+        );
+      return;
+    }
+    if (path === "/gone") {
+      res.writeHead(404, { "content-type": "text/plain" }).end("gone");
+      return;
+    }
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(page);
   });
   try {
@@ -119,6 +140,47 @@ try {
         throw new Error(`bin scrape stdout is missing the extracted fields:\n${stdout}`);
       }
       process.stdout.write(stdout);
+    });
+
+    await step("consumer bin: crawlio map (node)", async () => {
+      // `map` drives the packed scraper against the sitemap fixture — the
+      // packed dist must parse the urlset and return both same-origin locs.
+      const stdout = await $`node node_modules/crawlio/dist/cli.js map ${base}`
+        .cwd(consumer)
+        .text();
+      const out = JSON.parse(stdout) as { source?: string; urls?: Array<{ url: string }> };
+      if (
+        out.source !== "sitemap" ||
+        (out.urls ?? []).length !== 2 ||
+        !(out.urls ?? []).some((entry) => entry.url === `${base}/nested/a`)
+      ) {
+        throw new Error(`unexpected map output: ${stdout}`);
+      }
+    });
+
+    await step("consumer bin: failure paths (node)", async () => {
+      // An unknown subcommand exits 1 with the "unknown command" hint on
+      // stderr — and an HTTP 404 page surfaces as a non-zero exit carrying
+      // the HttpError status.
+      const unknown = await $`node node_modules/crawlio/dist/cli.js bogus`
+        .cwd(consumer)
+        .quiet()
+        .nothrow();
+      if (unknown.exitCode !== 1 || !/crawlio: unknown command/i.test(unknown.stderr.toString())) {
+        throw new Error(
+          `crawlio bogus: code=${unknown.exitCode} stderr=${unknown.stderr.toString()}`,
+        );
+      }
+      const gone =
+        await $`node node_modules/crawlio/dist/cli.js scrape ${`${base}/gone`} --fields title=h1`
+          .cwd(consumer)
+          .quiet()
+          .nothrow();
+      if (gone.exitCode !== 1 || !/HTTP 404/.test(gone.stderr.toString())) {
+        throw new Error(
+          `crawlio scrape /gone: code=${gone.exitCode} stderr=${gone.stderr.toString()}`,
+        );
+      }
     });
   } finally {
     await new Promise<void>((resolve) => cli.close(() => resolve()));

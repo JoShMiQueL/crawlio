@@ -198,6 +198,17 @@ describe("resolveMcpSearchProvider — CLI precedence", () => {
       /BRAVE_API_KEY.*SERPER_API_KEY.*TAVILY_API_KEY/,
     );
   });
+
+  it("rejects non-enum providers — module specifiers are CLI-only", async () => {
+    // The MCP surface must never reach the adapter loader: the rejection is
+    // a ConfigError naming the built-in names, so nothing is ever imported.
+    for (const provider of ["./evil-module", "npm:whatever", "file:///tmp/x.mjs"]) {
+      const err = await resolveMcpSearchProvider(provider, {}).catch((e: unknown) => e);
+      expect(err, provider).toBeInstanceOf(ConfigError);
+      expect((err as Error).message, provider).toMatch(/expected one of/);
+      expect((err as Error).message, provider).not.toMatch(/could not load/);
+    }
+  });
 });
 
 describe("createCrawlioTools — tool handlers", () => {
@@ -404,6 +415,16 @@ describe("createCrawlioTools — tool handlers", () => {
     expect(text).toMatch(/BRAVE_API_KEY/);
   });
 
+  it("search rejects a module-specifier provider — enum-only on the MCP surface", async () => {
+    const tools = makeTools({ env: {} });
+    const text = errorText(
+      await tools.call("search", { query: "crawlio", provider: "./evil-module" }),
+    );
+    expect(text).toMatch(/expected one of/);
+    // A validation error, not an adapter-load failure — no import ran.
+    expect(text).not.toMatch(/could not load/);
+  });
+
   it("search limit 0 returns [] without resolving a provider at all", async () => {
     // `search()` resolves its provider LAST — after the `limit: 0`
     // short-circuit — so a zero-limit call must not demand an API key.
@@ -573,6 +594,36 @@ describe("protocol smoke — real Server over InMemoryTransport", () => {
     } finally {
       process.off("unhandledRejection", onUnhandled);
       await server.close();
+    }
+  });
+
+  it("advertises and enforces the enum of built-in search providers", async () => {
+    const { impl } = fixtureFetch("<html></html>");
+    const { server, tools } = await createCrawlioMcpServer({ fetch: impl });
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      // tools/list advertises the enum, so MCP clients surface choices only.
+      const list = await client.listTools();
+      const searchTool = list.tools.find((tool) => tool.name === "search");
+      const providerSchema = (
+        searchTool?.inputSchema as { properties?: { provider?: { enum?: string[] } } } | undefined
+      )?.properties?.provider;
+      expect(providerSchema?.enum).toEqual(["brave", "serper", "tavily"]);
+      // tools/call validation enforces it before the handler sees the args —
+      // a module specifier can never reach the adapter loader from MCP.
+      const result = await client.callTool({
+        name: "search",
+        arguments: { query: "x", provider: "./evil-module" },
+      });
+      expect(result.isError).toBe(true);
+      const text = (result.content as Array<{ text: string }>)[0]?.text;
+      expect(text).toMatch(/provider/i);
+    } finally {
+      await client.close();
+      await server.close();
+      await tools.close();
     }
   });
 });
