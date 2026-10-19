@@ -1,6 +1,6 @@
 {
   "name": "crawlio",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Typed web scraping SDK — scrape, map, crawl, and search over HTTP, with a pluggable renderer, CLI, and MCP server",
   "keywords": [
     "scraper",
