@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.1](https://github.com/JoShMiQueL/crawlio/compare/v0.1.0...v0.1.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* release-please component-less tags — crawlio-v* tags never matched release.yml v* trigger ([#38](https://github.com/JoShMiQueL/crawlio/issues/38)) ([54cc520](https://github.com/JoShMiQueL/crawlio/commit/54cc520124c26e80fdf89530a9a3a65693e46810))
+
+
+### Reverts
+
+* release-please PR template customization ([#40](https://github.com/JoShMiQueL/crawlio/issues/40)) ([08adee8](https://github.com/JoShMiQueL/crawlio/commit/08adee86a806e80081562d83b9c84a52c3854288))
+
 ## [0.1.0] - Unreleased
 
 ### Added
