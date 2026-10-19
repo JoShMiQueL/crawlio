@@ -6,7 +6,7 @@
     "useIgnoreFile": false
   },
   "files": {
-    "includes": ["**/*.ts", "**/*.json", "!**/dist"]
+    "includes": ["**/*.ts", "**/*.json", "!**/dist", "!live-results"]
   },
   "formatter": {
     "enabled": true,

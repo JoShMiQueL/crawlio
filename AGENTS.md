@@ -36,7 +36,7 @@ A library, not a hosted service. Non-goals, in order of importance:
 | `bun run typecheck` | `tsc --noEmit` + `-p tsconfig.test.json` + `-p tsconfig.scripts.json` + `-p tsconfig.e2e.json` |
 | `bun test test/` | bun:test — Bun's own runner (NOT vitest); the CI bun-lane suite |
 | `bun run e2e` | packed-tarball consumer e2e — build → `npm pack` → `npm install` into a tmp project → the packed `crawlio install` does the engine setup → `bun test` on `e2e/render.test.ts` (Bun only) |
-| `CRAWLIO_LIVE=1 bun test test/live.test.ts` | live-network suite — real requests against real public sites; skipped without the env var (on Windows `set CRAWLIO_LIVE=1` first; Node lane: `npx vitest run test/live.test.ts`). Runs nightly via `.github/workflows/live.yml`, never on the PR gate |
+| `CRAWLIO_LIVE=1 bun test test/live.test.ts` | live-network suite — real requests against real public sites; skipped without the env var (on Windows `set CRAWLIO_LIVE=1` first; Node lane: `npx vitest run test/live.test.ts`). Runs nightly via `.github/workflows/live.yml`, never on the PR gate. Results land in the run's step summary and the `live-results` artifact |
 | `bun run test` | vitest, single run — the `vitest` .bin shim executes it under node, so this is the SAME lane as `npm run test` |
 | `bun run test:types` | `tsc --noEmit -p tsconfig.test.json` (type-only assertions in `test/types.test.ts`) |
 | `bun run build` | `tsc -p tsconfig.build.json` → `dist/` |
