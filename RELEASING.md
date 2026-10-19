@@ -5,8 +5,10 @@ Releases are autonomous but human-gated. On every push to `main`,
 [release-please](https://github.com/googleapis/release-please): it keeps
 a **Release PR** open that accumulates the changelog and the
 `package.json` version bump from conventional commits. The one human
-click is merging that PR — release-please then creates the `v*` tag and
-the GitHub release with categorized notes, and the same workflow
+click is merging that PR — release-please then creates the
+component-less `vX.Y.Z` tag (via `include-component-in-tag` in
+`release-please-config.json`) and the GitHub release with categorized
+notes, and the same workflow
 re-runs the full proof chain (lint, typecheck, tests, build, pack
 checks, browser e2e) on the tagged commit before publishing to npm with
 provenance.
