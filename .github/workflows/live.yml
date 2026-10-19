@@ -46,3 +46,13 @@ jobs:
         if: matrix.runtime == 'node'
       - run: bun test test/live.test.ts
         if: matrix.runtime == 'bun'
+
+      # Extracted data — pretty JSON written by the suite — for humans to
+      # inspect without downloading logs. The step summary table is the
+      # primary view; this is the raw artifact.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: live-results-${{ matrix.runtime }}
+          path: live-results/
+          if-no-files-found: ignore
